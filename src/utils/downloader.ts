@@ -10,26 +10,58 @@ export interface DownloadOptions {
     audioOnly?: boolean;
     outputDir: string;
     onProgress?: (progress: string) => void;
+    isInstagram?: boolean;
 }
 
 export class Downloader {
-    static async getInfo(url: string): Promise<any> {
+    static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
         try {
-            // Use --no-playlist to ensure we only get info for the single video
-            // Add --no-warnings for cleaner output and faster processing
-            const { stdout } = await execPromise(`yt-dlp --no-playlist --no-warnings -j "${url}"`);
+            // Build yt-dlp command with Instagram-specific options if needed
+            let command = 'yt-dlp --no-playlist --no-warnings';
+            
+            if (isInstagram) {
+                // Instagram-specific options for better compatibility
+                command += ' --extractor-args "instagram:skip_auth_warning=True"';
+                command += ' --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"';
+            }
+            
+            command += ` -j "${url}"`;
+            
+            const { stdout, stderr } = await execPromise(command);
+            
+            if (stderr && !stderr.includes('WARNING')) {
+                Logger.debug(`yt-dlp stderr: ${stderr}`);
+            }
+            
             return JSON.parse(stdout);
         } catch (error: any) {
             Logger.error(`Error getting info for ${url}`, error);
-            if (error.stderr?.includes('truncated_id')) {
+            
+            const errorOutput = error.stderr || error.stdout || error.message || '';
+            
+            // Handle specific error cases
+            if (errorOutput.includes('truncated_id') || errorOutput.includes('Invalid URL')) {
                 throw new Error('URL noto\'g\'ri yoki qisqarib ketgan. Iltimos, to\'liq linkni yuboring.');
             }
-            throw new Error('Ma\'lumot olishda xato yuz berdi. Linkni tekshirib ko\'ring.');
+            if (errorOutput.includes('Private') || errorOutput.includes('private')) {
+                throw new Error('Bu post yopiq (private). Faqat ochiq postlardan yuklab olish mumkin.');
+            }
+            if (errorOutput.includes('not found') || errorOutput.includes('404') || errorOutput.includes('unavailable')) {
+                throw new Error('Post topilmadi yoki o\'chirilgan. Iltimos, boshqa havolani yuboring.');
+            }
+            if (errorOutput.includes('login') || errorOutput.includes('authentication') || errorOutput.includes('Sign in')) {
+                throw new Error('Instagram postiga kirish uchun autentifikatsiya kerak. Bu post yopiq bo\'lishi mumkin.');
+            }
+            if (errorOutput.includes('rate limit') || errorOutput.includes('429') || errorOutput.includes('Too Many Requests')) {
+                throw new Error('Juda ko\'p so\'rovlar. Iltimos, birozdan so\'ng urinib ko\'ring.');
+            }
+            
+            throw new Error(`Ma'lumot olishda xato yuz berdi: ${errorOutput.substring(0, 200)}`);
         }
     }
 
     static async download(url: string, options: DownloadOptions): Promise<string> {
-        const { audioOnly, outputDir, onProgress } = options;
+        const { audioOnly, outputDir, onProgress, isInstagram = false } = options;
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
@@ -37,25 +69,35 @@ export class Downloader {
         // Determine format
         // Audio: best mp3
         // Video: best mp4 <= 480p for Telegram compatibility
+        // For Instagram, use simpler format selection as it often has limited formats
         const format = audioOnly
             ? 'bestaudio/best'
-            : 'bestvideo[vcodec^=avc1][height<=480]+bestaudio[ext=m4a]/best[ext=mp4][height<=480]/best';
+            : isInstagram
+                ? 'best[ext=mp4]/best[height<=720]/best' // Instagram videos are usually short, allow up to 720p
+                : 'bestvideo[vcodec^=avc1][height<=480]+bestaudio[ext=m4a]/best[ext=mp4][height<=480]/best';
 
         const args = [
             '--no-playlist',
             '--no-check-certificate',
             '--no-warnings',
-            '--extractor-retries', '1',
+            '--extractor-retries', isInstagram ? '3' : '1', // More retries for Instagram
             '--prefer-free-formats',
             '--concurrent-fragments', '5',
             '--file-access-retries', '3',
-            '--socket-timeout', '15',
+            '--socket-timeout', isInstagram ? '30' : '15', // Longer timeout for Instagram
             '--newline',
             '--print', 'after_move:filepath',
             '-f', format,
             '-o', path.join(outputDir, '%(title).200s.%(ext)s'),
-            url
         ];
+
+        // Add Instagram-specific options
+        if (isInstagram) {
+            args.push('--extractor-args', 'instagram:skip_auth_warning=True');
+            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        }
+
+        args.push(url);
 
         if (audioOnly) {
             args.push('-x', '--audio-format', 'mp3');
@@ -101,19 +143,36 @@ export class Downloader {
                         resolve(filePath);
                     } else {
                         // Fallback: find the newest file in outputDir
-                        const files = fs.readdirSync(outputDir);
-                        const latestFile = files
-                            .map(name => ({ name, time: fs.statSync(path.join(outputDir, name)).mtime.getTime() }))
-                            .sort((a, b) => b.time - a.time)[0];
+                        try {
+                            const files = fs.readdirSync(outputDir);
+                            if (files.length === 0) {
+                                reject(new Error('Yuklab olingan fayl topilmadi. Post yopiq yoki o\'chirilgan bo\'lishi mumkin.'));
+                                return;
+                            }
+                            
+                            const latestFile = files
+                                .map(name => ({ name, time: fs.statSync(path.join(outputDir, name)).mtime.getTime() }))
+                                .sort((a, b) => b.time - a.time)[0];
 
-                        if (latestFile) {
-                            resolve(path.join(outputDir, latestFile.name));
-                        } else {
+                            if (latestFile) {
+                                resolve(path.join(outputDir, latestFile.name));
+                            } else {
+                                reject(new Error('Yuklab olingan fayl topilmadi.'));
+                            }
+                        } catch (err) {
+                            Logger.error('Error finding downloaded file', err);
                             reject(new Error('Yuklab olingan fayl topilmadi.'));
                         }
                     }
                 } else {
-                    reject(new Error(`yt-dlp exited with code ${code}`));
+                    // Provide more helpful error messages based on exit code
+                    let errorMsg = `Yuklab olishda xatolik (kod: ${code})`;
+                    if (code === 1) {
+                        errorMsg = 'Post topilmadi, yopiq yoki o\'chirilgan bo\'lishi mumkin.';
+                    } else if (code === 2) {
+                        errorMsg = 'Yuklab olishda xatolik. Internet aloqasini tekshiring.';
+                    }
+                    reject(new Error(errorMsg));
                 }
             });
 

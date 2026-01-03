@@ -29,6 +29,12 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
     let lastUpdate = Date.now();
     const isInstagram = url.includes('instagram.com');
 
+    // Validate Instagram URL if it's an Instagram link
+    if (isInstagram && !InstagramService.isValidInstagramUrl(url)) {
+        await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, '❌ Noto\'g\'ri Instagram havolasi. Iltimos, to\'g\'ri Instagram post, reel yoki video havolasini yuboring.').catch(() => { });
+        return;
+    }
+
     const onProgress = async (progress: string) => {
         // Throttling updates to once per 2 seconds to avoid Telegram rate limits
         if (Date.now() - lastUpdate > 2000) {
@@ -39,8 +45,11 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
     };
 
     try {
+        // Normalize Instagram URL if needed
+        const normalizedUrl = isInstagram ? InstagramService.normalizeUrl(url) : url;
+        
         // Check info first to see file size
-        const info = await Downloader.getInfo(url);
+        const info = await Downloader.getInfo(normalizedUrl, isInstagram);
         const duration = info.duration || 0;
 
         // Estimation of size if not provided (yt-dlp info might have it or not)
@@ -51,9 +60,9 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
 
         let result: any;
         if (isInstagram) {
-            result = await InstagramService.handleLink(url, onProgress);
+            result = await InstagramService.handleLink(normalizedUrl, onProgress);
         } else {
-            result = await YoutubeService.handleLink(url, false, onProgress);
+            result = await YoutubeService.handleLink(normalizedUrl, false, onProgress);
         }
 
         const stats = fs.statSync(result.filePath);
@@ -86,25 +95,45 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
         });
 
         // If Instagram, also search for and send the full version
-        if (isInstagram) {
+        if (isInstagram && result.metadata) {
             try {
                 // Priority 1: Use Instagram's native track metadata (most accurate)
                 let searchQuery = '';
-                if (info.track) {
-                    // Instagram Reels often have 'track' field with the actual song name
-                    searchQuery = info.track;
-                } else if (info.artist && info.track) {
-                    searchQuery = `${info.artist} ${info.track}`;
+                const metadata = result.metadata;
+                
+                // Try multiple metadata sources
+                if (metadata.track) {
+                    // If we have both artist and track, combine them
+                    if (metadata.artist) {
+                        searchQuery = `${metadata.artist} ${metadata.track}`;
+                    } else {
+                        searchQuery = metadata.track;
+                    }
+                } else if (metadata.description) {
+                    // Try to extract music info from description
+                    // Instagram often includes music info in description like "🎵 Song Name - Artist"
+                    const musicMatch = metadata.description.match(/🎵\s*([^\n]+)/i) || 
+                                     metadata.description.match(/Music:\s*([^\n]+)/i) ||
+                                     metadata.description.match(/Song:\s*([^\n]+)/i);
+                    if (musicMatch) {
+                        searchQuery = musicMatch[1].trim();
+                    }
+                } else if (info.description) {
+                    // Fallback to info.description if metadata.description is not available
+                    const musicMatch = info.description.match(/🎵\s*([^\n]+)/i) || 
+                                     info.description.match(/Music:\s*([^\n]+)/i);
+                    if (musicMatch) {
+                        searchQuery = musicMatch[1].trim();
+                    }
+                } else if (info.track) {
+                    // Direct track field from yt-dlp
+                    searchQuery = info.artist ? `${info.artist} ${info.track}` : info.track;
                 } else if (info.alt_title) {
                     // Sometimes alt_title contains the music info
                     searchQuery = info.alt_title;
-                } else {
-                    // If no music metadata found, skip full version search
-                    Logger.info('No music metadata found in Instagram video, skipping full version search');
-                    return;
                 }
 
-                if (searchQuery) {
+                if (searchQuery && searchQuery.length > 3) {
                     Logger.info(`Searching for full version: ${searchQuery}`);
                     const searchResults = await MusicService.search(searchQuery, 1);
 
@@ -120,10 +149,16 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
                         });
 
                         if (fs.existsSync(fullAudioResult.filePath)) fs.unlinkSync(fullAudioResult.filePath);
+                    } else {
+                        Logger.info(`No search results found for: ${searchQuery}`);
                     }
+                } else {
+                    Logger.info('No music metadata found in Instagram video, skipping full version search');
                 }
-            } catch (searchErr) {
+            } catch (searchErr: any) {
                 Logger.error('Error finding full version for Instagram link', searchErr);
+                // Don't fail the whole operation if music search fails
+                // The extracted audio from video is already sent
             }
         }
 
@@ -133,7 +168,17 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
         await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
     } catch (e: any) {
         Logger.error('Media delivery error', e);
-        const errorMessage = `❌ Xatolik: ${e.message}`;
+        
+        // Provide user-friendly error messages
+        let errorMessage = `❌ Xatolik: ${e.message || 'Noma\'lum xatolik'}`;
+        
+        // Clean up any partial downloads
+        try {
+            // This is a best-effort cleanup, errors here are not critical
+        } catch (cleanupErr) {
+            Logger.error('Error during cleanup', cleanupErr);
+        }
+        
         await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, errorMessage).catch(() => { });
     }
 };
@@ -231,6 +276,13 @@ export const messageHandler = async (ctx: any) => {
 
             if (matches && matches.length > 0) {
                 const url = matches[0];
+                
+                // Validate Instagram URLs before processing
+                if (url.includes('instagram.com') && !InstagramService.isValidInstagramUrl(url)) {
+                    await ctx.reply('❌ Noto\'g\'ri Instagram havolasi. Iltimos, to\'g\'ri Instagram post, reel yoki video havolasini yuboring.\n\nMasalan:\n• https://www.instagram.com/reel/...\n• https://www.instagram.com/p/...\n• https://www.instagram.com/tv/...');
+                    return;
+                }
+                
                 const statusMsg = await ctx.reply('🚀 Havola tahlil qilinmoqda...');
                 await handleMediaDelivery(url, ctx, statusMsg);
                 return;
