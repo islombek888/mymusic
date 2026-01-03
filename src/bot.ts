@@ -8,7 +8,15 @@ dotenv.config();
 const token = process.env.BOT_TOKEN;
 
 if (!token) {
-    Logger.error('BOT_TOKEN is missing in .env file');
+    Logger.error('========================================');
+    Logger.error('ERROR: BOT_TOKEN is missing!');
+    Logger.error('========================================');
+    Logger.error('Please set BOT_TOKEN environment variable.');
+    Logger.error('On Render: Go to Environment tab and add BOT_TOKEN');
+    Logger.error('Locally: Create .env file with BOT_TOKEN=your_token_here');
+    Logger.error('========================================');
+    console.error('BOT_TOKEN environment variable is required but not set.');
+    console.error('The bot cannot start without a valid Telegram bot token.');
     process.exit(1);
 }
 

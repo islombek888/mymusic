@@ -19,6 +19,13 @@ const start = async () => {
     try {
         Logger.info('Sonex Music Bot ishga tushmoqda...');
 
+        // Check for required environment variables
+        if (!process.env.BOT_TOKEN) {
+            Logger.error('BOT_TOKEN environment variable is missing!');
+            Logger.error('Please set BOT_TOKEN in your environment variables or .env file.');
+            process.exit(1);
+        }
+
         // Start HTTP server for Render
         server.listen(PORT, () => {
             Logger.info(`HTTP server listening on port ${PORT}`);
@@ -27,8 +34,14 @@ const start = async () => {
         // Start Telegram bot
         await bot.launch();
         Logger.info('Bot muvaffaqiyatli ishga tushdi!');
-    } catch (error) {
+    } catch (error: any) {
         Logger.error('Botni ishga tushirishda xatolik:', error);
+        if (error.message) {
+            Logger.error(`Error message: ${error.message}`);
+        }
+        if (error.stack) {
+            Logger.error(`Stack trace: ${error.stack}`);
+        }
         process.exit(1);
     }
 };

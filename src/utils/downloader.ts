@@ -1,10 +1,7 @@
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { Logger } from './logger.js';
 import path from 'path';
 import fs from 'fs';
-
-const execPromise = promisify(exec);
 
 export interface DownloadOptions {
     audioOnly?: boolean;
@@ -16,24 +13,52 @@ export interface DownloadOptions {
 export class Downloader {
     static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
         try {
-            // Build yt-dlp command with Instagram-specific options if needed
-            let command = 'yt-dlp --no-playlist --no-warnings';
+            // Use spawn instead of exec for better security and reliability
+            const args = ['--no-playlist', '--no-warnings', '-j'];
             
             if (isInstagram) {
                 // Instagram-specific options for better compatibility
-                command += ' --extractor-args "instagram:skip_auth_warning=True"';
-                command += ' --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"';
+                args.push('--extractor-args', 'instagram:skip_auth_warning=True');
+                args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             }
             
-            command += ` -j "${url}"`;
+            args.push(url);
             
-            const { stdout, stderr } = await execPromise(command);
-            
-            if (stderr && !stderr.includes('WARNING')) {
-                Logger.debug(`yt-dlp stderr: ${stderr}`);
-            }
-            
-            return JSON.parse(stdout);
+            // Use spawn and collect output
+            return new Promise((resolve, reject) => {
+                const child = spawn('yt-dlp', args);
+                let stdout = '';
+                let stderr = '';
+                
+                child.stdout.on('data', (data) => {
+                    stdout += data.toString();
+                });
+                
+                child.stderr.on('data', (data) => {
+                    stderr += data.toString();
+                });
+                
+                child.on('close', (code) => {
+                    if (code === 0) {
+                        if (stderr && !stderr.includes('WARNING')) {
+                            Logger.debug(`yt-dlp stderr: ${stderr}`);
+                        }
+                        try {
+                            resolve(JSON.parse(stdout));
+                        } catch (parseError) {
+                            Logger.error('Error parsing yt-dlp JSON output', parseError);
+                            reject(new Error('Ma\'lumotlarni tahlil qilishda xatolik.'));
+                        }
+                    } else {
+                        reject(new Error(`yt-dlp exited with code ${code}: ${stderr.substring(0, 200)}`));
+                    }
+                });
+                
+                child.on('error', (err) => {
+                    Logger.error('Error spawning yt-dlp', err);
+                    reject(new Error(`yt-dlp ishga tushirishda xatolik: ${err.message}`));
+                });
+            });
         } catch (error: any) {
             Logger.error(`Error getting info for ${url}`, error);
             
