@@ -44,11 +44,11 @@ export class InstagramService {
             }
             
             // Check if it's a valid Instagram post/reel/tv path
-            const path = urlObj.pathname.toLowerCase();
-            return path.includes('/p/') || 
-                   path.includes('/reel/') || 
-                   path.includes('/tv/') ||
-                   path.includes('/reels/');
+            const pathname = urlObj.pathname.toLowerCase();
+            return pathname.includes('/p/') || 
+                   pathname.includes('/reel/') || 
+                   pathname.includes('/tv/') ||
+                   pathname.includes('/reels/');
         } catch {
             return false;
         }
@@ -131,6 +131,50 @@ export class InstagramService {
                            info.channel || 
                            'Instagram User';
 
+            // Enhanced metadata extraction for better music search
+            let track = info.track || null;
+            let artist = info.artist || null;
+            const description = info.description || info.fulltitle || '';
+            
+            // Try to extract from description if not in track/artist fields
+            if (!track && description) {
+                // Pattern 1: "🎵 Song Name - Artist"
+                const pattern1 = description.match(/🎵\s*([^-]+?)\s*-\s*([^\n]+)/i);
+                if (pattern1) {
+                    track = pattern1[1].trim();
+                    artist = pattern1[2].trim();
+                } else {
+                    // Pattern 2: "Music: Song Name by Artist"
+                    const pattern2 = description.match(/Music[:\s]+([^by]+?)\s+by\s+([^\n]+)/i);
+                    if (pattern2) {
+                        track = pattern2[1].trim();
+                        artist = pattern2[2].trim();
+                    } else {
+                        // Pattern 3: Just "🎵 Song Name"
+                        const pattern3 = description.match(/🎵\s*([^\n]+)/i);
+                        if (pattern3) {
+                            const musicInfo = pattern3[1].trim();
+                            // Try to split by " - " or " by "
+                            const splitByDash = musicInfo.split(/\s*-\s*/);
+                            if (splitByDash.length >= 2) {
+                                track = splitByDash[0].trim();
+                                artist = splitByDash.slice(1).join(' - ').trim();
+                            } else {
+                                track = musicInfo;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Clean up track and artist
+            if (track) {
+                track = track.replace(/[🎵🎶🎤🎧]/g, '').trim();
+            }
+            if (artist) {
+                artist = artist.replace(/[🎵🎶🎤🎧]/g, '').trim();
+            }
+
             return {
                 title: title.substring(0, 200), // Limit title length
                 uploader: uploader.substring(0, 100),
@@ -139,9 +183,9 @@ export class InstagramService {
                 url: normalizedUrl,
                 // Store additional metadata for music search
                 metadata: {
-                    track: info.track || info.description?.match(/🎵\s*(.+)/)?.[1] || null,
-                    artist: info.artist || null,
-                    description: info.description || '',
+                    track: track,
+                    artist: artist,
+                    description: description,
                     fulltitle: info.fulltitle || title
                 }
             };
@@ -154,7 +198,7 @@ export class InstagramService {
             }
             
             // Otherwise, provide a generic but helpful error
-            throw new Error(`Instagram postini qayta ishlashda xatolik: ${error.message || 'Noma'lum xatolik'}`);
+            throw new Error(`Instagram postini qayta ishlashda xatolik: ${error.message || "Noma'lum xatolik"}`);
         }
     }
 }

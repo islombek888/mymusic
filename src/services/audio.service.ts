@@ -16,6 +16,14 @@ export class AudioService {
         return new Promise((resolve, reject) => {
             ffmpeg(inputPath)
                 .toFormat('mp3')
+                .audioBitrate(128) // Lower bitrate for faster processing (still good quality)
+                .audioCodec('libmp3lame')
+                .audioChannels(2) // Stereo
+                .audioFrequency(44100) // Standard frequency
+                .outputOptions([
+                    '-preset fast', // Fast encoding preset
+                    '-threads 2' // Use 2 threads for faster processing
+                ])
                 .on('end', () => {
                     Logger.info(`Audio extracted to ${outputPath}`);
                     resolve(outputPath);

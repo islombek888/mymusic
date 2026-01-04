@@ -1,15 +1,10 @@
 services:
   - type: web
     name: sonex-music-bot
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: |
-      apt-get update && 
-      apt-get install -y python3 python3-pip ffmpeg && 
-      pip3 install yt-dlp && 
-      npm install && 
-      npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     envVars:
       - key: NODE_ENV
         value: production

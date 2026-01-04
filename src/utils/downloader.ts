@@ -14,7 +14,12 @@ export class Downloader {
     static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
         try {
             // Use spawn instead of exec for better security and reliability
-            const args = ['--no-playlist', '--no-warnings', '-j'];
+            const args = [
+                '--no-playlist', 
+                '--no-warnings', 
+                '--socket-timeout', '10', // Reduced timeout for speed
+                '-j'
+            ];
             
             if (isInstagram) {
                 // Instagram-specific options for better compatibility
@@ -105,13 +110,14 @@ export class Downloader {
             '--no-playlist',
             '--no-check-certificate',
             '--no-warnings',
-            '--extractor-retries', isInstagram ? '3' : '1', // More retries for Instagram
+            '--extractor-retries', isInstagram ? '2' : '1', // Reduced retries for speed
             '--prefer-free-formats',
-            '--concurrent-fragments', '5',
-            '--file-access-retries', '3',
-            '--socket-timeout', isInstagram ? '30' : '15', // Longer timeout for Instagram
+            '--concurrent-fragments', '8', // Increased for faster download
+            '--file-access-retries', '2', // Reduced for speed
+            '--socket-timeout', isInstagram ? '20' : '10', // Reduced timeout for speed
             '--newline',
             '--print', 'after_move:filepath',
+            '--no-part', // Don't use .part files (faster)
             '-f', format,
             '-o', path.join(outputDir, '%(title).200s.%(ext)s'),
         ];
