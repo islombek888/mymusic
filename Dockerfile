@@ -1,7 +1,11 @@
-# ===== BASE IMAGE =====
+# ===============================
+# Base image (ESM + stable)
+# ===============================
 FROM node:20-bullseye
 
-# ===== SYSTEM DEPS =====
+# ===============================
+# System dependencies
+# ===============================
 RUN apt-get update && apt-get install -y \
     python3 \
     ffmpeg \
@@ -9,33 +13,51 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ===== INSTALL yt-dlp (OFFICIAL BINARY) =====
+# ===============================
+# Install yt-dlp (official binary)
+# ===============================
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && \
     chmod +x /usr/local/bin/yt-dlp
 
-# ===== WORKDIR =====
+# ===============================
+# App directory
+# ===============================
 WORKDIR /app
 
-# ===== NODE DEPS =====
+# ===============================
+# Install node dependencies
+# ===============================
 COPY package*.json ./
 RUN npm ci
 
-# ===== SOURCE =====
+# ===============================
+# Copy source code
+# ===============================
 COPY . .
 
-# ===== BUILD =====
+# ===============================
+# Build TypeScript
+# ===============================
 RUN npm run build
 
-# ===== RUNTIME DIRS =====
+# ===============================
+# Runtime folders
+# ===============================
 RUN mkdir -p \
     downloads/youtube \
     downloads/instagram \
     downloads/extracted \
     downloads/temp
 
-# ===== PORT =====
+# ===============================
+# Render port
+# ===============================
 EXPOSE 3000
 
-# ===== START =====
-CMD ["node", "dist/main.js"]
+# ===============================
+# Start app (IMPORTANT)
+# ===============================
+CMD ["node", "dist/index.js"]
+
+RUN ls -R dist
