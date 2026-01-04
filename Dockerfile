@@ -1,30 +1,33 @@
-# ===== BASE IMAGE (STABLE) =====
+# ===== BASE IMAGE =====
 FROM node:20-bullseye
 
-# ===== SYSTEM DEPENDENCIES =====
-# python3  → yt-dlp uchun
-# ffmpeg  → audio extract uchun
-# yt-dlp  → instagram / youtube downloader
+# ===== SYSTEM DEPS =====
 RUN apt-get update && apt-get install -y \
     python3 \
     ffmpeg \
-    yt-dlp \
+    curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ===== APP DIRECTORY =====
+# ===== INSTALL yt-dlp (OFFICIAL BINARY) =====
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    -o /usr/local/bin/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp
+
+# ===== WORKDIR =====
 WORKDIR /app
 
-# ===== NODE DEPENDENCIES =====
+# ===== NODE DEPS =====
 COPY package*.json ./
 RUN npm ci
 
-# ===== SOURCE CODE =====
+# ===== SOURCE =====
 COPY . .
 
-# ===== BUILD NESTJS =====
+# ===== BUILD =====
 RUN npm run build
 
-# ===== RUNTIME DIRECTORIES =====
+# ===== RUNTIME DIRS =====
 RUN mkdir -p \
     downloads/youtube \
     downloads/instagram \
@@ -34,5 +37,5 @@ RUN mkdir -p \
 # ===== PORT =====
 EXPOSE 3000
 
-# ===== START APP =====
+# ===== START =====
 CMD ["node", "dist/main.js"]
