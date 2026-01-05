@@ -11,23 +11,24 @@ export interface DownloadOptions {
 }
 
 export class Downloader {
-    private static getYtDlpBin(): string {
+    // Public methods for external access
+    public static getYtDlpBin(): string {
         return process.env.YT_DLP_BIN || 'yt-dlp';
     }
 
-    private static getYtDlpArgs(): string[] {
-        // Use python3.11 -m yt-dlp if direct binary doesn't work
+    public static getYtDlpArgs(): string[] {
+        // Use python3 -m yt-dlp if direct binary doesn't work
         const ytDlpBin = process.env.YT_DLP_BIN || 'yt-dlp';
         return ytDlpBin.includes('python') 
-            ? ytDlpBin.split(' ') // ['python3.11', '-m', 'yt-dlp']
+            ? ytDlpBin.split(' ') // ['python3', '-m', 'yt-dlp']
             : ['yt-dlp'];
     }
 
-    private static getYtDlpEnv(): NodeJS.ProcessEnv {
-        const home = process.env.HOME || '/tmp';
-        const cacheHome = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
-        const configHome = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
-
+    public static getYtDlpEnv(): any {
+        const home = '/tmp';
+        const cacheHome = '/tmp/.cache';
+        const configHome = '/tmp/.config';
+        
         try {
             if (!fs.existsSync(cacheHome)) fs.mkdirSync(cacheHome, { recursive: true });
         } catch {
@@ -45,6 +46,7 @@ export class Downloader {
             HOME: home,
             XDG_CACHE_HOME: cacheHome,
             XDG_CONFIG_HOME: configHome,
+            PYTHONUNBUFFERED: '1'
         };
     }
 
@@ -103,8 +105,11 @@ export class Downloader {
         ];
 
         if (isInstagram) {
-            args.push('--extractor-args', 'instagram:skip_auth_warning=True');
-            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            args.push('--extractor-args', 'instagram:skip_auth_warning=True,skip_api_login=True');
+            args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1');
+            args.push('--add-header', 'accept-language:en-US,en;q=0.9');
+            args.push('--add-header', 'accept-encoding:gzip, deflate, br');
+            args.push('--add-header', 'dnt:1');
         }
 
         args.push(url);
@@ -204,8 +209,11 @@ export class Downloader {
 
         // Add Instagram-specific options
         if (isInstagram) {
-            args.push('--extractor-args', 'instagram:skip_auth_warning=True');
-            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            args.push('--extractor-args', 'instagram:skip_auth_warning=True,skip_api_login=True');
+            args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1');
+            args.push('--add-header', 'accept-language:en-US,en;q=0.9');
+            args.push('--add-header', 'accept-encoding:gzip, deflate, br');
+            args.push('--add-header', 'dnt:1');
         }
 
         args.push(url);

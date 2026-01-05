@@ -1,5 +1,6 @@
 import { Downloader } from '../utils/downloader.js';
 import { Logger } from '../utils/logger.js';
+import { YoutubeService } from './youtube.service.js';
 import path from 'path';
 
 export class InstagramService {
@@ -175,13 +176,25 @@ export class InstagramService {
                 artist = artist.replace(/[🎵🎶🎤🎧]/g, '').trim();
             }
 
-            return {
-                title: title.substring(0, 200), // Limit title length
+            // If we found track and artist, try to find full version on YouTube
+            let fullVersionResult = null;
+            if (track && artist) {
+                try {
+                    Logger.info(`🔍 Searching full version on YouTube: ${artist} - ${track}`);
+                    fullVersionResult = await YoutubeService.findFullVersion(artist, track, onProgress);
+                    Logger.info(`✅ Found full version on YouTube!`);
+                } catch (error) {
+                    Logger.info(`⚠️ Full version not found on YouTube, using Instagram version`);
+                }
+            }
+
+            // Return Instagram version or YouTube full version
+            const finalResult = fullVersionResult || {
+                title: title.substring(0, 200),
                 uploader: uploader.substring(0, 100),
                 duration: info.duration || 0,
                 filePath,
                 url: normalizedUrl,
-                // Store additional metadata for music search
                 metadata: {
                     track: track,
                     artist: artist,
@@ -189,6 +202,8 @@ export class InstagramService {
                     fulltitle: info.fulltitle || title
                 }
             };
+
+            return finalResult;
         } catch (error: any) {
             Logger.error('Error in InstagramService.handleLink', error);
             

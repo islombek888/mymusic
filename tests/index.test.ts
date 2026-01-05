@@ -15,6 +15,31 @@ jest.unstable_mockModule('../src/bot.js', () => {
     return { default: mockBot };
 });
 
+jest.unstable_mockModule('../src/services/youtube.service.js', () => {
+    return {
+        YoutubeService: {
+            handleLink: jest.fn().mockResolvedValue({
+                id: '123',
+                title: 'Test Video',
+                filePath: '/tmp/test.mp3'
+            })
+        }
+    };
+});
+
+jest.unstable_mockModule('../src/services/instagram.service.js', () => {
+    return {
+        InstagramService: {
+            isValidInstagramUrl: jest.fn().mockReturnValue(true),
+            handleLink: jest.fn().mockResolvedValue({
+                id: '123',
+                title: 'Test Post',
+                filePath: '/tmp/test.mp3'
+            })
+        }
+    };
+});
+
 jest.unstable_mockModule('../src/utils/logger.js', () => {
     const LoggerMock = {
         info: jest.fn(),
