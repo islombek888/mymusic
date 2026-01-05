@@ -74,24 +74,6 @@ const server = http.createServer((req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
-    } else if (req.url === '/bot' && req.method === 'POST') {
-        // Handle webhook updates for Render
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', async () => {
-            try {
-                const update = JSON.parse(body);
-                await bot.handleUpdate(update);
-                res.writeHead(200);
-                res.end('OK');
-            } catch (error) {
-                Logger.error('Webhook error', error);
-                res.writeHead(500);
-                res.end('Error');
-            }
-        });
     } else {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('Sonex Music Bot is running!');
@@ -105,12 +87,6 @@ const start = async () => {
         if (!process.env.BOT_TOKEN) {
             Logger.error('BOT_TOKEN missing!');
             process.exit(1);
-        }
-
-        // Add delay to avoid conflicts with other bots
-        if (process.env.RENDER) {
-            Logger.info('Waiting 5 seconds to avoid conflicts...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
         server.listen(PORT, () => {
@@ -145,33 +121,16 @@ const start = async () => {
             }
         });
 
-        // Use webhook mode in Render, polling mode locally
-        if (process.env.RENDER) {
-            // First, delete any existing webhook to avoid conflicts
-            try {
-                await bot.telegram.deleteWebhook();
-                Logger.info('Deleted existing webhook');
-            } catch (error) {
-                Logger.info('No existing webhook to delete');
-            }
-            
-            const webhookUrl = `https://${process.env.RENDER_SERVICE_SLUG}.onrender.com/bot`;
-            Logger.info(`Setting webhook: ${webhookUrl}`);
-            
-            await bot.telegram.setWebhook(webhookUrl);
-            Logger.info('Webhook mode activated');
-        } else {
-            // For local development, first delete webhook then use polling
-            try {
-                await bot.telegram.deleteWebhook();
-                Logger.info('Deleted webhook for polling mode');
-            } catch (error) {
-                // Ignore if no webhook exists
-            }
-            
-            await bot.launch();
-            Logger.info('Polling mode activated');
+        // Always use polling mode - most reliable
+        try {
+            await bot.telegram.deleteWebhook();
+            Logger.info('Deleted webhook for polling mode');
+        } catch (error) {
+            // Ignore if no webhook exists
         }
+        
+        await bot.launch();
+        Logger.info('Polling mode activated');
         
         Logger.info('Bot muvaffaqiyatli ishga tushdi!');
 
