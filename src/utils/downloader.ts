@@ -50,6 +50,26 @@ export class Downloader {
         };
     }
 
+    private static getInstagramCookiesPath(): string | null {
+        const explicitPath = process.env.IG_COOKIES_PATH;
+        if (explicitPath && explicitPath.trim()) {
+            return explicitPath.trim();
+        }
+
+        const b64 = process.env.IG_COOKIES_B64;
+        if (!b64 || !b64.trim()) return null;
+
+        try {
+            const decoded = Buffer.from(b64, 'base64').toString('utf8');
+            const targetPath = '/tmp/ig-cookies.txt';
+            fs.writeFileSync(targetPath, decoded, { encoding: 'utf8' });
+            return targetPath;
+        } catch (e) {
+            Logger.error('Failed to decode IG_COOKIES_B64', e);
+            return null;
+        }
+    }
+
     private static getUserFriendlyYtDlpError(errorOutput: string): string {
         const lower = (errorOutput || '').toLowerCase();
 
@@ -77,8 +97,15 @@ export class Downloader {
             return 'Video/post topilmadi yoki o\'chirilgan. Iltimos, boshqa havolani yuboring.';
         }
 
-        if (lower.includes('sign in') || lower.includes('login') || lower.includes('authentication')) {
-            return 'Kontentga kirish uchun autentifikatsiya kerak (yopiq/cheklangan bo\'lishi mumkin). Iltimos, boshqa havolani sinab ko\'ring.';
+        if (
+            lower.includes('sign in') ||
+            lower.includes('login') ||
+            lower.includes('authentication') ||
+            lower.includes('cookies-from-browser') ||
+            lower.includes('use --cookies') ||
+            lower.includes('login required')
+        ) {
+            return 'Instagram kontentini olish uchun login/cookies kerak (yoki rate-limit bo\'lgan). Admin: Render ENV ga IG_COOKIES_B64 yoki IG_COOKIES_PATH qo\'ying. Foydalanuvchi: birozdan keyin qayta urinib ko\'ring yoki boshqa link yuboring.';
         }
 
         if (lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests')) {
@@ -110,6 +137,11 @@ export class Downloader {
             args.push('--add-header', 'accept-language:en-US,en;q=0.9');
             args.push('--add-header', 'accept-encoding:gzip, deflate, br');
             args.push('--add-header', 'dnt:1');
+
+            const cookiesPath = this.getInstagramCookiesPath();
+            if (cookiesPath) {
+                args.push('--cookies', cookiesPath);
+            }
         }
 
         args.push(url);
@@ -214,6 +246,11 @@ export class Downloader {
             args.push('--add-header', 'accept-language:en-US,en;q=0.9');
             args.push('--add-header', 'accept-encoding:gzip, deflate, br');
             args.push('--add-header', 'dnt:1');
+
+            const cookiesPath = this.getInstagramCookiesPath();
+            if (cookiesPath) {
+                args.push('--cookies', cookiesPath);
+            }
         }
 
         args.push(url);

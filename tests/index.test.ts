@@ -18,11 +18,7 @@ jest.unstable_mockModule('../src/bot.js', () => {
 jest.unstable_mockModule('../src/services/youtube.service.js', () => {
     return {
         YoutubeService: {
-            handleLink: jest.fn().mockResolvedValue({
-                id: '123',
-                title: 'Test Video',
-                filePath: '/tmp/test.mp3'
-            })
+            handleLink: jest.fn() as any
         }
     };
 });
@@ -30,12 +26,8 @@ jest.unstable_mockModule('../src/services/youtube.service.js', () => {
 jest.unstable_mockModule('../src/services/instagram.service.js', () => {
     return {
         InstagramService: {
-            isValidInstagramUrl: jest.fn().mockReturnValue(true),
-            handleLink: jest.fn().mockResolvedValue({
-                id: '123',
-                title: 'Test Post',
-                filePath: '/tmp/test.mp3'
-            })
+            isValidInstagramUrl: jest.fn() as any,
+            handleLink: jest.fn() as any
         }
     };
 });
@@ -48,23 +40,6 @@ jest.unstable_mockModule('../src/utils/logger.js', () => {
         warn: jest.fn()
     };
     return { Logger: LoggerMock, default: LoggerMock };
-});
-
-jest.unstable_mockModule('../src/services/youtube.service.js', () => {
-    return {
-        YoutubeService: {
-            handleLink: jest.fn()
-        }
-    };
-});
-
-jest.unstable_mockModule('../src/services/instagram.service.js', () => {
-    return {
-        InstagramService: {
-            isValidInstagramUrl: jest.fn(),
-            handleLink: jest.fn()
-        }
-    };
 });
 
 jest.unstable_mockModule('fs/promises', () => {
@@ -156,33 +131,27 @@ describe('Index', () => {
             close: jest.fn()
         };
 
-        const mockBot = {
-            on: jest.fn(),
-            launch: jest.fn(),
-            stop: jest.fn()
-        };
-
         const http = await import('http');
         (http.default.createServer as jest.Mock).mockReturnValue(mockServer);
 
-        const bot = await import('../src/bot.js');
-        // Bot is now directly the mock, no need to mockReturnValue
+        const botModule = await import('../src/bot.js');
+        const mockBot = botModule.default as any;
 
         const { YoutubeService } = await import('../src/services/youtube.service.js');
-        YoutubeService.handleLink.mockResolvedValue({
+        (YoutubeService.handleLink as unknown as jest.Mock).mockResolvedValue({
             id: '123',
             title: 'Test Video',
             filePath: '/tmp/test.mp3'
         });
 
         const fs = await import('fs/promises');
-        (fs.default.readFile as jest.Mock).mockResolvedValue(Buffer.from('audio data'));
+        (fs.default.readFile as unknown as jest.Mock).mockResolvedValue(Buffer.from('audio data') as any);
 
         // Import index to start the application
         await import('../src/index.js');
 
         // Get the text handler function
-        const textHandler = mockBot.on.mock.calls.find(call => call[0] === 'text')?.[1];
+        const textHandler = mockBot.on.mock.calls.find((call: any) => call[0] === 'text')?.[1];
         
         if (textHandler) {
             const mockCtx = {
@@ -206,21 +175,15 @@ describe('Index', () => {
             close: jest.fn()
         };
 
-        const mockBot = {
-            on: jest.fn(),
-            launch: jest.fn(),
-            stop: jest.fn()
-        };
-
         const http = await import('http');
         (http.default.createServer as jest.Mock).mockReturnValue(mockServer);
 
-        const bot = await import('../src/bot.js');
-        // Bot is now directly the mock, no need to mockReturnValue
+        const botModule = await import('../src/bot.js');
+        const mockBot = botModule.default as any;
 
         const { InstagramService } = await import('../src/services/instagram.service.js');
-        InstagramService.isValidInstagramUrl.mockReturnValue(true);
-        InstagramService.handleLink.mockResolvedValue({
+        (InstagramService.isValidInstagramUrl as unknown as jest.Mock).mockReturnValue(true);
+        (InstagramService.handleLink as unknown as jest.Mock).mockResolvedValue({
             id: '123',
             title: 'Test Post',
             filePath: '/tmp/test.mp3'
@@ -249,7 +212,7 @@ describe('Index', () => {
         }
     });
 
-    test('should reject invalid links', async () => {
+    test('should handle non-Instagram links', async () => {
         process.env.BOT_TOKEN = 'test-token';
 
         const mockServer = {
@@ -270,7 +233,7 @@ describe('Index', () => {
         // Bot is now directly the mock, no need to mockReturnValue
 
         const { InstagramService } = await import('../src/services/instagram.service.js');
-        InstagramService.isValidInstagramUrl.mockReturnValue(false);
+        (InstagramService.isValidInstagramUrl as unknown as jest.Mock).mockReturnValue(false);
 
         // Import index to start the application
         await import('../src/index.js');
