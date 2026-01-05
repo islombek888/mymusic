@@ -1,24 +1,35 @@
 # ===============================
-# Base image (ESM + stable)
+# Base image with Python 3.11+
 # ===============================
-FROM node:20-bullseye
+FROM node:22-bookworm
 
 # ===============================
 # System dependencies
 # ===============================
 RUN apt-get update && apt-get install -y \
     python3 \
+    python3-pip \
+    python3-distutils-extra \
     ffmpeg \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # ===============================
-# Install yt-dlp (official binary)
+# Install yt-dlp via pip (better compatibility)
 # ===============================
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-    -o /usr/local/bin/yt-dlp && \
-    chmod +x /usr/local/bin/yt-dlp
+RUN python3 -m pip install --upgrade pip --break-system-packages && \
+    python3 -m pip install yt-dlp --break-system-packages
+
+# Create symlink for compatibility
+RUN ln -sf /usr/local/bin/yt-dlp /usr/bin/yt-dlp
+
+# Ensure yt-dlp can write cache/config in restricted environments (Render)
+ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV XDG_CONFIG_HOME=/tmp/.config
+RUN mkdir -p /tmp/.cache /tmp/.config
+RUN yt-dlp --version
 
 # ===============================
 # App directory

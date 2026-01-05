@@ -7,7 +7,20 @@ jest.unstable_mockModule('fluent-ffmpeg', () => {
         if (event === 'end') setTimeout(cb, 0);
         return { on: mockOn, save: mockSave };
     });
-    const mockToFormat = jest.fn(() => ({ on: mockOn, save: mockSave }));
+    const mockAudioBitrate = jest.fn().mockReturnThis();
+    const mockAudioCodec = jest.fn().mockReturnThis();
+    const mockAudioChannels = jest.fn().mockReturnThis();
+    const mockAudioFrequency = jest.fn().mockReturnThis();
+    const mockOutputOptions = jest.fn().mockReturnThis();
+    const mockToFormat = jest.fn(() => ({
+        audioBitrate: mockAudioBitrate,
+        audioCodec: mockAudioCodec,
+        audioChannels: mockAudioChannels,
+        audioFrequency: mockAudioFrequency,
+        outputOptions: mockOutputOptions,
+        on: mockOn,
+        save: mockSave
+    }));
     const ffmpegMock = jest.fn(() => ({
         toFormat: mockToFormat,
         on: mockOn,

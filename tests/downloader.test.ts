@@ -30,14 +30,17 @@ describe('Downloader', () => {
     });
 
     test('getInfo should return video info', async () => {
-        // cp is the namespace/default object now
-        const mockExec = cp.exec || cp.default.exec;
-        mockExec.mockImplementation((cmd: any, cb: any): any => {
-            if (typeof cb === 'function') {
-                cb(null, { stdout: JSON.stringify({ id: '123', title: 'Test' }), stderr: '' });
-            }
-            return {} as any;
-        });
+        const mockSpawn = cp.spawn || cp.default.spawn;
+        const mockChild = {
+            stdout: { on: jest.fn((event: string, cb: (data: Buffer) => void) => {
+                if (event === 'data') cb(Buffer.from(JSON.stringify({ id: '123', title: 'Test' })));
+            })},
+            stderr: { on: jest.fn() },
+            on: jest.fn((event: string, cb: (code: number) => void) => {
+                if (event === 'close') cb(0);
+            })
+        };
+        mockSpawn.mockReturnValue(mockChild);
 
         const info = await Downloader.getInfo('https://youtube.com/watch?v=123');
         expect(info.id).toBe('123');

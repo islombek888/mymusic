@@ -4,6 +4,7 @@ import { jest } from '@jest/globals';
 jest.unstable_mockModule('../src/utils/downloader.js', () => {
     const DownloaderMock = {
         getInfo: jest.fn<() => Promise<any>>().mockResolvedValue({
+            id: '123',
             title: 'Insta Test',
             uploader: 'User',
             duration: 15

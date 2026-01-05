@@ -11,82 +11,159 @@ export interface DownloadOptions {
 }
 
 export class Downloader {
-    static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
+    private static getYtDlpBin(): string {
+        return process.env.YT_DLP_BIN || 'yt-dlp';
+    }
+
+    private static getYtDlpArgs(): string[] {
+        // Use python3.11 -m yt-dlp if direct binary doesn't work
+        const ytDlpBin = process.env.YT_DLP_BIN || 'yt-dlp';
+        return ytDlpBin.includes('python') 
+            ? ytDlpBin.split(' ') // ['python3.11', '-m', 'yt-dlp']
+            : ['yt-dlp'];
+    }
+
+    private static getYtDlpEnv(): NodeJS.ProcessEnv {
+        const home = process.env.HOME || '/tmp';
+        const cacheHome = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
+        const configHome = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+
         try {
-            // Use spawn instead of exec for better security and reliability
-            const args = [
-                '--no-playlist', 
-                '--no-warnings', 
-                '--socket-timeout', '10', // Reduced timeout for speed
-                '-j'
-            ];
-            
-            if (isInstagram) {
-                // Instagram-specific options for better compatibility
-                args.push('--extractor-args', 'instagram:skip_auth_warning=True');
-                args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-            }
-            
-            args.push(url);
-            
-            // Use spawn and collect output
-            return new Promise((resolve, reject) => {
-                const child = spawn('yt-dlp', args);
+            if (!fs.existsSync(cacheHome)) fs.mkdirSync(cacheHome, { recursive: true });
+        } catch {
+            // ignore
+        }
+
+        try {
+            if (!fs.existsSync(configHome)) fs.mkdirSync(configHome, { recursive: true });
+        } catch {
+            // ignore
+        }
+
+        return {
+            ...process.env,
+            HOME: home,
+            XDG_CACHE_HOME: cacheHome,
+            XDG_CONFIG_HOME: configHome,
+        };
+    }
+
+    private static getUserFriendlyYtDlpError(errorOutput: string): string {
+        const lower = (errorOutput || '').toLowerCase();
+
+        if (!errorOutput) {
+            return 'Yuklab olish servisida xatolik yuz berdi. Iltimos, birozdan so\'ng qayta urinib ko\'ring.';
+        }
+
+        if (errorOutput.includes('Traceback') || lower.includes('runpy.py') || lower.includes('modulenotfounderror')) {
+            return 'Serverda yuklab olish servisida ichki xatolik yuz berdi. Iltimos, birozdan so\'ng qayta urinib ko\'ring.';
+        }
+
+        if (lower.includes('permission denied') || lower.includes('read-only file system') || lower.includes('readonly file system')) {
+            return 'Serverda fayl yozishga ruxsat yo\'q. Deploy sozlamalarini tekshiring.';
+        }
+
+        if (lower.includes('truncated_id') || lower.includes('invalid url')) {
+            return 'URL noto\'g\'ri yoki qisqarib ketgan. Iltimos, to\'liq linkni yuboring.';
+        }
+
+        if (lower.includes('private') || lower.includes('this video is private')) {
+            return 'Bu video/post yopiq (private). Faqat ochiq kontentdan yuklab olish mumkin.';
+        }
+
+        if (lower.includes('not found') || lower.includes('404') || lower.includes('unavailable')) {
+            return 'Video/post topilmadi yoki o\'chirilgan. Iltimos, boshqa havolani yuboring.';
+        }
+
+        if (lower.includes('sign in') || lower.includes('login') || lower.includes('authentication')) {
+            return 'Kontentga kirish uchun autentifikatsiya kerak (yopiq/cheklangan bo\'lishi mumkin). Iltimos, boshqa havolani sinab ko\'ring.';
+        }
+
+        if (lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests')) {
+            return 'Juda ko\'p so\'rovlar bo\'ldi (429). Iltimos, birozdan so\'ng urinib ko\'ring.';
+        }
+
+        if (lower.includes('temporary failure in name resolution') || lower.includes('network is unreachable') || lower.includes('connection refused') || lower.includes('timed out')) {
+            return 'Server internet ulanishida muammo. Iltimos, birozdan so\'ng qayta urinib ko\'ring.';
+        }
+
+        return 'Yuklab olishda xatolik yuz berdi. Iltimos, boshqa link bilan urinib ko\'ring.';
+    }
+
+    static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
+        const args = [
+            '--no-config',
+            '--no-cache-dir',
+            '--no-playlist',
+            '--no-warnings',
+            '--no-check-certificate',
+            '--force-ipv4',
+            '--socket-timeout', '10',
+            '-j'
+        ];
+
+        if (isInstagram) {
+            args.push('--extractor-args', 'instagram:skip_auth_warning=True');
+            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        }
+
+        args.push(url);
+
+        const ytDlpBin = this.getYtDlpBin();
+        const ytDlpBaseArgs = this.getYtDlpArgs();
+        const env = this.getYtDlpEnv();
+
+        try {
+            const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+                const child = ytDlpBaseArgs.length > 1 
+                    ? spawn(ytDlpBaseArgs[0], [...ytDlpBaseArgs.slice(1), ...args], { env })
+                    : spawn(ytDlpBin, args, { env });
                 let stdout = '';
                 let stderr = '';
-                
+
                 child.stdout.on('data', (data) => {
                     stdout += data.toString();
                 });
-                
+
                 child.stderr.on('data', (data) => {
                     stderr += data.toString();
                 });
-                
+
                 child.on('close', (code) => {
                     if (code === 0) {
-                        if (stderr && !stderr.includes('WARNING')) {
-                            Logger.debug(`yt-dlp stderr: ${stderr}`);
-                        }
-                        try {
-                            resolve(JSON.parse(stdout));
-                        } catch (parseError) {
-                            Logger.error('Error parsing yt-dlp JSON output', parseError);
-                            reject(new Error('Ma\'lumotlarni tahlil qilishda xatolik.'));
-                        }
-                    } else {
-                        reject(new Error(`yt-dlp exited with code ${code}: ${stderr.substring(0, 200)}`));
+                        resolve({ stdout, stderr });
+                        return;
                     }
+
+                    const err: any = new Error(`yt-dlp exited with code ${code}`);
+                    err.code = code;
+                    err.stdout = stdout;
+                    err.stderr = stderr;
+                    reject(err);
                 });
-                
+
                 child.on('error', (err) => {
-                    Logger.error('Error spawning yt-dlp', err);
-                    reject(new Error(`yt-dlp ishga tushirishda xatolik: ${err.message}`));
+                    const spawnErr: any = new Error(`yt-dlp ishga tushirishda xatolik: ${err.message}`);
+                    spawnErr.original = err;
+                    reject(spawnErr);
                 });
             });
+
+            if (stderr && !stderr.includes('WARNING')) {
+                Logger.debug(`yt-dlp stderr: ${stderr}`);
+            }
+
+            try {
+                return JSON.parse(stdout);
+            } catch (parseError) {
+                Logger.error('Error parsing yt-dlp JSON output', parseError);
+                throw new Error('Ma\'lumotlarni tahlil qilishda xatolik.');
+            }
         } catch (error: any) {
             Logger.error(`Error getting info for ${url}`, error);
-            
-            const errorOutput = error.stderr || error.stdout || error.message || '';
-            
-            // Handle specific error cases
-            if (errorOutput.includes('truncated_id') || errorOutput.includes('Invalid URL')) {
-                throw new Error('URL noto\'g\'ri yoki qisqarib ketgan. Iltimos, to\'liq linkni yuboring.');
-            }
-            if (errorOutput.includes('Private') || errorOutput.includes('private')) {
-                throw new Error('Bu post yopiq (private). Faqat ochiq postlardan yuklab olish mumkin.');
-            }
-            if (errorOutput.includes('not found') || errorOutput.includes('404') || errorOutput.includes('unavailable')) {
-                throw new Error('Post topilmadi yoki o\'chirilgan. Iltimos, boshqa havolani yuboring.');
-            }
-            if (errorOutput.includes('login') || errorOutput.includes('authentication') || errorOutput.includes('Sign in')) {
-                throw new Error('Instagram postiga kirish uchun autentifikatsiya kerak. Bu post yopiq bo\'lishi mumkin.');
-            }
-            if (errorOutput.includes('rate limit') || errorOutput.includes('429') || errorOutput.includes('Too Many Requests')) {
-                throw new Error('Juda ko\'p so\'rovlar. Iltimos, birozdan so\'ng urinib ko\'ring.');
-            }
-            
-            throw new Error(`Ma'lumot olishda xato yuz berdi: ${errorOutput.substring(0, 200)}`);
+            const errorOutput = (error?.stderr || error?.stdout || error?.message || '').toString();
+            Logger.debug(`yt-dlp getInfo raw error: ${errorOutput.substring(0, 1000)}`);
+            throw new Error(this.getUserFriendlyYtDlpError(errorOutput));
         }
     }
 
@@ -107,9 +184,12 @@ export class Downloader {
                 : 'bestvideo[vcodec^=avc1][height<=480]+bestaudio[ext=m4a]/best[ext=mp4][height<=480]/best';
 
         const args = [
+            '--no-config',
+            '--no-cache-dir',
             '--no-playlist',
             '--no-check-certificate',
             '--no-warnings',
+            '--force-ipv4',
             '--extractor-retries', isInstagram ? '2' : '1', // Reduced retries for speed
             '--prefer-free-formats',
             '--concurrent-fragments', '8', // Increased for faster download
@@ -136,9 +216,15 @@ export class Downloader {
 
         return new Promise((resolve, reject) => {
             Logger.info(`Starting download: ${url}`);
-            const child = spawn('yt-dlp', args);
+            const ytDlpBin = this.getYtDlpBin();
+            const ytDlpBaseArgs = this.getYtDlpArgs();
+            const env = Downloader.getYtDlpEnv();
+            const child = ytDlpBaseArgs.length > 1 
+                ? spawn(ytDlpBaseArgs[0], [...ytDlpBaseArgs.slice(1), ...args], { env })
+                : spawn(ytDlpBin, args, { env });
             let filePath = '';
             let lastProgress = '';
+            let stderr = '';
 
             child.stdout.on('data', (data) => {
                 const lines = data.toString().split('\n');
@@ -161,6 +247,7 @@ export class Downloader {
 
             child.stderr.on('data', (data) => {
                 const msg = data.toString();
+                stderr += msg;
                 if (!msg.includes('WARNING')) {
                     Logger.debug(`yt-dlp stderr: ${msg}`);
                 }
@@ -197,13 +284,17 @@ export class Downloader {
                     }
                 } else {
                     // Provide more helpful error messages based on exit code
-                    let errorMsg = `Yuklab olishda xatolik (kod: ${code})`;
-                    if (code === 1) {
-                        errorMsg = 'Post topilmadi, yopiq yoki o\'chirilgan bo\'lishi mumkin.';
-                    } else if (code === 2) {
-                        errorMsg = 'Yuklab olishda xatolik. Internet aloqasini tekshiring.';
-                    }
-                    reject(new Error(errorMsg));
+                    const raw = stderr.substring(0, 2000);
+                    const fallback = code === 2
+                        ? 'Yuklab olishda xatolik. Internet aloqasini tekshiring.'
+                        : 'Yuklab olishda xatolik yuz berdi.';
+
+                    const friendly = raw
+                        ? Downloader.getUserFriendlyYtDlpError(raw)
+                        : fallback;
+
+                    Logger.error('yt-dlp download failed', { code, stderr: raw });
+                    reject(new Error(friendly));
                 }
             });
 
