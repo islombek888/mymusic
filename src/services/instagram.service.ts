@@ -125,7 +125,7 @@ export class InstagramService {
             const title = info.title || 
                          info.fulltitle || 
                          info.description?.split('\n')[0] || 
-                         'Instagram Video';
+                         `Instagram Video - ${new Date().toLocaleDateString()}`;
             
             const uploader = info.uploader || 
                            info.uploader_id || 
@@ -163,9 +163,32 @@ export class InstagramService {
                             } else {
                                 track = musicInfo;
                             }
+                        } else {
+                            // Pattern 4: Extract hashtags that might contain song info
+                            const hashtags = description.match(/#\w+/g) || [];
+                            const musicHashtags = hashtags.filter((tag: string) => 
+                                tag.toLowerCase().includes('music') || 
+                                tag.toLowerCase().includes('song') ||
+                                tag.toLowerCase().includes('audio')
+                            );
+                            
+                            if (musicHashtags.length > 0 && description.length > 20) {
+                                // Use first part of description as track if no specific music info found
+                                track = description.split('\n')[0].substring(0, 50).trim();
+                            }
                         }
                     }
                 }
+            }
+            
+            // If still no track, try to extract from title
+            if (!track && title && title !== 'Instagram Video') {
+                // Remove common prefixes and use as track
+                track = title
+                    .replace(/^reel\s+/i, '')
+                    .replace(/^video\s+/i, '')
+                    .replace(/by\s+[^\s]+$/i, '')
+                    .trim();
             }
             
             // Clean up track and artist
@@ -203,6 +226,7 @@ export class InstagramService {
                 }
             };
 
+            Logger.info(`📊 Instagram metadata extracted: track="${track}", artist="${artist}", title="${title}"`);
             return finalResult;
         } catch (error: any) {
             Logger.error('Error in InstagramService.handleLink', error);

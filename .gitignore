@@ -1,6 +1,14 @@
 node_modules
+downloads
+*.log
 dist
 
-*.log
 
-downloads
+# Environment and sensitive files
+.env
+.env.local
+
+# Cookie files
+*_cookies.txt
+youtube_cookies.txt
+instagram_cookies.txt

@@ -8,6 +8,7 @@ export interface DownloadOptions {
     outputDir: string;
     onProgress?: (progress: string) => void;
     isInstagram?: boolean;
+    skipCookies?: boolean;
 }
 
 export class Downloader {
@@ -19,7 +20,7 @@ export class Downloader {
     public static getYtDlpArgs(): string[] {
         // Use python3 -m yt-dlp if direct binary doesn't work
         const ytDlpBin = process.env.YT_DLP_BIN || 'yt-dlp';
-        return ytDlpBin.includes('python') 
+        return ytDlpBin.includes('python')
             ? ytDlpBin.split(' ') // ['python3', '-m', 'yt-dlp']
             : ['yt-dlp'];
     }
@@ -28,7 +29,7 @@ export class Downloader {
         const home = '/tmp';
         const cacheHome = '/tmp/.cache';
         const configHome = '/tmp/.config';
-        
+
         try {
             if (!fs.existsSync(cacheHome)) fs.mkdirSync(cacheHome, { recursive: true });
         } catch {
@@ -70,6 +71,26 @@ export class Downloader {
         }
     }
 
+    private static getYouTubeCookiesPath(): string | null {
+        const explicitPath = process.env.YT_COOKIES_PATH;
+        if (explicitPath && explicitPath.trim()) {
+            return explicitPath.trim();
+        }
+
+        const b64 = process.env.YT_COOKIES_B64;
+        if (!b64 || !b64.trim()) return null;
+
+        try {
+            const decoded = Buffer.from(b64, 'base64').toString('utf8');
+            const targetPath = '/tmp/yt-cookies.txt';
+            fs.writeFileSync(targetPath, decoded, { encoding: 'utf8' });
+            return targetPath;
+        } catch (e) {
+            Logger.error('Failed to decode YT_COOKIES_B64', e);
+            return null;
+        }
+    }
+
     private static getUserFriendlyYtDlpError(errorOutput: string): string {
         const lower = (errorOutput || '').toLowerCase();
 
@@ -103,9 +124,26 @@ export class Downloader {
             lower.includes('authentication') ||
             lower.includes('cookies-from-browser') ||
             lower.includes('use --cookies') ||
-            lower.includes('login required')
+            lower.includes('login required') ||
+            lower.includes('confirm you\'re not a bot') ||
+            lower.includes('confirm that you are not a bot')
         ) {
-            return 'Instagram kontentini olish uchun login/cookies kerak (yoki rate-limit bo\'lgan). Admin: Render ENV ga IG_COOKIES_B64 yoki IG_COOKIES_PATH qo\'ying. Foydalanuvchi: birozdan keyin qayta urinib ko\'ring yoki boshqa link yuboring.';
+            // Detect if it's YouTube or Instagram
+            if (lower.includes('youtube') || lower.includes('yt-dlp')) {
+                Logger.error('YouTube auth required: set YT_COOKIES_B64 or YT_COOKIES_PATH on the server to enable downloads.');
+                return 'YouTube kontentiga kirish uchun autentifikatsiya kerak. Iltimos, boshqa video havolasini sinab ko\'ring yoki birozdan keyin qayta urinib ko\'ring.';
+            } else {
+                Logger.error('Instagram auth/rate-limit: set IG_COOKIES_B64 or IG_COOKIES_PATH on the server to enable downloads.');
+                return 'Instagram kontentini yuklab bo\'lmadi: login/cookies kerak yoki vaqtinchalik cheklov (rate-limit). Iltimos, birozdan keyin urinib ko\'ring yoki boshqa link yuboring.';
+            }
+        }
+
+        if (lower.includes('age') && (lower.includes('restricted') || lower.includes('verification'))) {
+            return 'Bu video yosh cheklovi bilan himoyalangan. Iltimos, boshqa video havolasini yuboring.';
+        }
+
+        if (lower.includes('video is not available') || lower.includes('this video is unavailable')) {
+            return 'Video mavjud emas yoki sizning mintaqangizda bloklangan. Iltimos, boshqa video havolasini yuboring.';
         }
 
         if (lower.includes('rate limit') || lower.includes('429') || lower.includes('too many requests')) {
@@ -119,7 +157,9 @@ export class Downloader {
         return 'Yuklab olishda xatolik yuz berdi. Iltimos, boshqa link bilan urinib ko\'ring.';
     }
 
-    static async getInfo(url: string, isInstagram: boolean = false): Promise<any> {
+    static async getInfo(url: string, isInstagram: boolean = false, retryWithoutCookies: boolean = false): Promise<any> {
+        const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+
         const args = [
             '--no-config',
             '--no-cache-dir',
@@ -127,7 +167,7 @@ export class Downloader {
             '--no-warnings',
             '--no-check-certificate',
             '--force-ipv4',
-            '--socket-timeout', '10',
+            '--socket-timeout', '15',
             '-j'
         ];
 
@@ -142,6 +182,21 @@ export class Downloader {
             if (cookiesPath) {
                 args.push('--cookies', cookiesPath);
             }
+        } else if (isYouTube) {
+            // YouTube - Android client is more stable and less likely to trigger "Sign in" errors
+            // We prioritize android, then ios, then web (as web often requires strict cookies)
+            // If retryWithoutCookies is true, force skipping cookies
+            const cookiesPath = !retryWithoutCookies ? this.getYouTubeCookiesPath() : null;
+
+            if (cookiesPath) {
+                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
+                args.push('--cookies', cookiesPath);
+            } else {
+                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js');
+            }
+
+            // Standard user agent to look like a real browser
+            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         }
 
         args.push(url);
@@ -152,7 +207,7 @@ export class Downloader {
 
         try {
             const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-                const child = ytDlpBaseArgs.length > 1 
+                const child = ytDlpBaseArgs.length > 1
                     ? spawn(ytDlpBaseArgs[0], [...ytDlpBaseArgs.slice(1), ...args], { env })
                     : spawn(ytDlpBin, args, { env });
                 let stdout = '';
@@ -197,15 +252,25 @@ export class Downloader {
                 throw new Error('Ma\'lumotlarni tahlil qilishda xatolik.');
             }
         } catch (error: any) {
-            Logger.error(`Error getting info for ${url}`, error);
             const errorOutput = (error?.stderr || error?.stdout || error?.message || '').toString();
+
+            // RETRY MECHANISM: If YouTube auth failed and we haven't retried without cookies yet
+            if (!retryWithoutCookies && !isInstagram && isYouTube &&
+                (errorOutput.includes('Sign in') || errorOutput.includes('cookies') || errorOutput.includes('bot'))) {
+                Logger.warn('YouTube auth failed with cookies, retrying without cookies...');
+                return this.getInfo(url, isInstagram, true);
+            }
+
+            Logger.error(`Error getting info for ${url}`, error);
             Logger.debug(`yt-dlp getInfo raw error: ${errorOutput.substring(0, 1000)}`);
             throw new Error(this.getUserFriendlyYtDlpError(errorOutput));
         }
     }
 
     static async download(url: string, options: DownloadOptions): Promise<string> {
-        const { audioOnly, outputDir, onProgress, isInstagram = false } = options;
+        const { audioOnly, outputDir, onProgress, isInstagram = false, skipCookies = false } = options;
+        const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
@@ -227,11 +292,11 @@ export class Downloader {
             '--no-check-certificate',
             '--no-warnings',
             '--force-ipv4',
-            '--extractor-retries', isInstagram ? '2' : '1', // Reduced retries for speed
+            '--extractor-retries', isInstagram ? '2' : '3', // More retries for YouTube
             '--prefer-free-formats',
-            '--concurrent-fragments', '8', // Increased for faster download
-            '--file-access-retries', '2', // Reduced for speed
-            '--socket-timeout', isInstagram ? '20' : '10', // Reduced timeout for speed
+            // '--concurrent-fragments', '8', // REMOVED: Causing HTTP 416 errors
+            '--file-access-retries', '3',
+            '--socket-timeout', isInstagram ? '20' : '15',
             '--newline',
             '--print', 'after_move:filepath',
             '--no-part', // Don't use .part files (faster)
@@ -251,6 +316,21 @@ export class Downloader {
             if (cookiesPath) {
                 args.push('--cookies', cookiesPath);
             }
+        } else if (isYouTube) {
+            // YouTube - Android client is more stable and less likely to trigger "Sign in" errors
+            // We prioritize android, then ios, then web (as web often requires strict cookies)
+            // If skipCookies is true, force skipping cookies
+            const cookiesPath = !skipCookies ? this.getYouTubeCookiesPath() : null;
+
+            if (cookiesPath) {
+                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
+                args.push('--cookies', cookiesPath);
+            } else {
+                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js');
+            }
+
+            // Standard user agent to look like a real browser
+            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         }
 
         args.push(url);
@@ -260,11 +340,11 @@ export class Downloader {
         }
 
         return new Promise((resolve, reject) => {
-            Logger.info(`Starting download: ${url}`);
+            Logger.info(`Starting download: ${url}, skipCookies: ${skipCookies}`);
             const ytDlpBin = this.getYtDlpBin();
             const ytDlpBaseArgs = this.getYtDlpArgs();
             const env = Downloader.getYtDlpEnv();
-            const child = ytDlpBaseArgs.length > 1 
+            const child = ytDlpBaseArgs.length > 1
                 ? spawn(ytDlpBaseArgs[0], [...ytDlpBaseArgs.slice(1), ...args], { env })
                 : spawn(ytDlpBin, args, { env });
             let filePath = '';
@@ -312,7 +392,7 @@ export class Downloader {
                                 reject(new Error('Yuklab olingan fayl topilmadi. Post yopiq yoki o\'chirilgan bo\'lishi mumkin.'));
                                 return;
                             }
-                            
+
                             const latestFile = files
                                 .map(name => ({ name, time: fs.statSync(path.join(outputDir, name)).mtime.getTime() }))
                                 .sort((a, b) => b.time - a.time)[0];
@@ -328,8 +408,21 @@ export class Downloader {
                         }
                     }
                 } else {
-                    // Provide more helpful error messages based on exit code
                     const raw = stderr.substring(0, 2000);
+
+                    // RETRY MECHANISM for DOWNLOAD
+                    // If we haven't skipped cookies yet, and it's a YouTube Sign in error
+                    if (!skipCookies && isYouTube &&
+                        (raw.includes('Sign in') || raw.includes('cookies') || raw.includes('bot'))) {
+                        Logger.warn('YouTube download failed with cookies, attempting retry without cookies...');
+                        // Recursive retry without cookies
+                        const newOptions = { ...options, skipCookies: true };
+                        Downloader.download(url, newOptions)
+                            .then(resolve)
+                            .catch(reject);
+                        return;
+                    }
+
                     const fallback = code === 2
                         ? 'Yuklab olishda xatolik. Internet aloqasini tekshiring.'
                         : 'Yuklab olishda xatolik yuz berdi.';

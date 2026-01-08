@@ -145,7 +145,7 @@ describe('Index', () => {
         });
 
         const fs = await import('fs/promises');
-        (fs.default.readFile as unknown as jest.Mock).mockResolvedValue(Buffer.from('audio data') as any);
+        (fs.default.readFile as any).mockImplementation(async () => Buffer.from('audio data'));
 
         // Import index to start the application
         await import('../src/index.js');
@@ -190,13 +190,13 @@ describe('Index', () => {
         });
 
         const fs = await import('fs/promises');
-        (fs.default.readFile as jest.Mock).mockResolvedValue(Buffer.from('audio data'));
+        (fs.default.readFile as any).mockImplementation(async () => Buffer.from('audio data'));
 
         // Import index to start the application
         await import('../src/index.js');
 
         // Get the text handler function
-        const textHandler = mockBot.on.mock.calls.find(call => call[0] === 'text')?.[1];
+        const textHandler = mockBot.on.mock.calls.find((call: any) => call[0] === 'text')?.[1];
         
         if (textHandler) {
             const mockCtx = {
@@ -220,17 +220,11 @@ describe('Index', () => {
             close: jest.fn()
         };
 
-        const mockBot = {
-            on: jest.fn(),
-            launch: jest.fn(),
-            stop: jest.fn()
-        };
-
         const http = await import('http');
         (http.default.createServer as jest.Mock).mockReturnValue(mockServer);
 
-        const bot = await import('../src/bot.js');
-        // Bot is now directly the mock, no need to mockReturnValue
+        const botModule = await import('../src/bot.js');
+        const mockBot = botModule.default as any;
 
         const { InstagramService } = await import('../src/services/instagram.service.js');
         (InstagramService.isValidInstagramUrl as unknown as jest.Mock).mockReturnValue(false);
@@ -239,7 +233,7 @@ describe('Index', () => {
         await import('../src/index.js');
 
         // Get the text handler function
-        const textHandler = mockBot.on.mock.calls.find(call => call[0] === 'text')?.[1];
+        const textHandler = mockBot.on.mock.calls.find((call: any) => call[0] === 'text')?.[1];
         
         if (textHandler) {
             const mockCtx = {

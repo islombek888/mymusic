@@ -28,7 +28,7 @@ const getProgressBar = (progress: string) => {
  */
 const parseDuration = (durationStr: string): number => {
     if (!durationStr || durationStr === '0:00') return 0;
-    
+
     try {
         const parts = durationStr.split(':').map(Number);
         if (parts.length === 2) {
@@ -70,7 +70,7 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
     try {
         // Normalize Instagram URL if needed
         const normalizedUrl = isInstagram ? InstagramService.normalizeUrl(url) : url;
-        
+
         // Check info first to see file size
         const info = await Downloader.getInfo(normalizedUrl, isInstagram);
         const duration = info.duration || 0;
@@ -97,349 +97,113 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
             return;
         }
 
-        // Determine if this is a short video or full song
-        // Short videos: < 2 minutes (120 seconds) - typically Instagram Reels, YouTube Shorts
-        // Full songs: >= 2 minutes - typically full music videos
-        const isShortVideo = duration < 120; // 2 minutes threshold
-        const isFullSong = duration >= 120;
-
         // Extract Audio in parallel with other operations (don't wait)
         const audioExtractionPromise = AudioService.extractAudio(result.filePath);
 
-        // Send video only if small and not a full song (to save time)
-        if (sizeMB <= 50 && !isFullSong) {
-            // Send Video first as native object (non-blocking)
-            ctx.replyWithVideo({ source: result.filePath }, {
+        // 1. ALWAYS send video first if size is reasonable
+        if (sizeMB <= 50) {
+            await ctx.replyWithVideo({ source: result.filePath }, {
                 caption: `🎥 ${result.title}\n\n@SonexMusicBot`
-            }).catch(() => {}); // Don't wait, continue processing
+            }).catch(() => { });
+        } else {
+            await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `⚠️ Video juda katta (${sizeMB.toFixed(1)}MB). Faqat audio yuboriladi.`).catch(() => { });
         }
 
-        // Wait for audio extraction
+        // 2. Wait for audio extraction
         const audioPath = await audioExtractionPromise;
-        
-        await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `✅ Tayyor! Yuborilmoqda...`).catch(() => {});
 
-        // If it's a full song, just send the audio once (no need to search for full version)
-        if (isFullSong) {
-            // Send as full song (not "cut" version)
-            await ctx.replyWithAudio({ source: audioPath }, {
-                title: `🎵 ${result.title}`,
-                performer: result.uploader,
-                caption: "🎵 To'liq musiqa"
-            });
-            
-            // Cleanup and return - no need to search for full version
-            if (fs.existsSync(result.filePath)) fs.unlinkSync(result.filePath);
-            if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-            await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
-            return;
-        }
+        await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `✅ Tayyor! Audio yuborilmoqda...`).catch(() => { });
 
-        // For short videos, try to find and send the full version of the song
-        // Start searching immediately, send cut audio in parallel
-        if (isShortVideo && (result.metadata || (!isInstagram && info.title))) {
-            // Send Cut Audio from short video in parallel (non-blocking)
-            const cutCaption = isInstagram ? "✂️ Vidyo dagi musiqa (Kesilgan)" : "✂️ Qisqa vidyo'dan ajratilgan musiqa";
-            const sendCutAudioPromise = ctx.replyWithAudio({ source: audioPath }, {
-                title: `✂️ ${result.title} (Kesilgan)`,
-                performer: result.uploader,
-                caption: cutCaption
-            }).catch(() => {}); // Don't wait, start searching for full version immediately
+        // 3. ALWAYS send audio from the video first (Fast)
+        await ctx.replyWithAudio({ source: audioPath }, {
+            title: `🎵 ${result.title}`,
+            performer: result.uploader,
+            caption: "🎵 Musiqa (@SonexMusicBot)"
+        });
+
+        // 4. Smart Full Song Recovery (Senior Logic)
+        // If it's a short video (< 3 mins), try to find the actual full song
+        const isShortVideo = duration > 0 && duration < 180;
+
+        if (isShortVideo) {
             try {
-                // Priority 1: Use metadata to find the full version of the song
-                let searchQuery = '';
-                let originalDuration = duration; // Store original video duration for comparison
-                
-                if (isInstagram && result.metadata) {
-                    const metadata = result.metadata;
-                    
-                    // Try multiple metadata sources for Instagram - prioritize most accurate
-                    // 1. Track + Artist (most accurate)
-                    if (metadata.track && metadata.artist) {
-                        searchQuery = `${metadata.artist} ${metadata.track}`;
-                    } else if (metadata.track) {
-                        searchQuery = metadata.track;
-                    } 
-                    // 2. Description'dan extract qilish
-                    else if (metadata.description) {
-                        // Try multiple patterns for music info
-                        const patterns = [
-                            /🎵\s*([^\n]+)/i,
-                            /Music:\s*([^\n]+)/i,
-                            /Song:\s*([^\n]+)/i,
-                            /Original\s+Audio:\s*([^\n]+)/i,
-                            /Track:\s*([^\n]+)/i
-                        ];
-                        
-                        for (const pattern of patterns) {
-                            const match = metadata.description.match(pattern);
-                            if (match) {
-                                searchQuery = match[1].trim();
-                                // Remove emojis and clean up
-                                searchQuery = searchQuery.replace(/[🎵🎶🎤🎧]/g, '').trim();
-                                break;
-                            }
-                        }
-                    }
-                    // 3. Fulltitle'dan extract qilish
-                    if (!searchQuery && metadata.fulltitle) {
-                        searchQuery = metadata.fulltitle
-                            .replace(/\s*-\s*Instagram.*/i, '')
-                            .replace(/\s*#.*/g, '')
-                            .trim();
-                    }
-                }
-                
-                // For YouTube or if Instagram metadata didn't work, try info fields
-                if (!searchQuery) {
-                    // 1. Track + Artist (most accurate)
-                    if (info.track) {
-                        searchQuery = info.artist ? `${info.artist} ${info.track}` : info.track;
-                    } 
-                    // 2. Description'dan extract
-                    else if (info.description) {
-                        const patterns = [
-                            /🎵\s*([^\n]+)/i,
-                            /Music:\s*([^\n]+)/i,
-                            /Song:\s*([^\n]+)/i,
-                            /Original\s+Audio:\s*([^\n]+)/i
-                        ];
-                        
-                        for (const pattern of patterns) {
-                            const match = info.description.match(pattern);
-                            if (match) {
-                                searchQuery = match[1].trim();
-                                searchQuery = searchQuery.replace(/[🎵🎶🎤🎧]/g, '').trim();
-                                break;
-                            }
-                        }
-                    } 
-                    // 3. Alt title
-                    else if (info.alt_title) {
-                        searchQuery = info.alt_title;
-                    } 
-                    // 4. Title'dan tozalash (YouTube uchun) - more careful cleaning
-                    else if (info.title && !isInstagram) {
-                        // More careful cleaning - preserve artist and song name structure
-                        searchQuery = info.title
-                            .replace(/\s*\(.*?official.*?\)/gi, '') // Remove (Official Video) etc
-                            .replace(/\s*\(.*?lyrics.*?\)/gi, '') // Remove (Lyrics) etc
-                            .replace(/\s*\(.*?audio.*?\)/gi, '') // Remove (Audio) etc
-                            .replace(/\s*\[.*?\]/g, '') // Remove [HD] etc
-                            .replace(/\s*-\s*Official\s*(Video|Audio|Lyrics).*/i, '') // Remove "- Official Video/Audio"
-                            .replace(/\s*-\s*Lyrics.*/i, '') // Remove "- Lyrics..."
-                            .replace(/\s*-\s*Audio.*/i, '') // Remove "- Audio..." (but keep artist - song format)
-                            .replace(/\s*\(.*?\)/g, '') // Remove any remaining parentheses
-                            .trim();
-                    }
-                }
-                
-                // Clean up search query - but preserve important characters
-                if (searchQuery) {
-                    searchQuery = searchQuery
-                        .replace(/\s+/g, ' ') // Multiple spaces to single
-                        .replace(/[^\w\s\-\u0400-\u04FF]/g, '') // Remove special chars except hyphens and Cyrillic
-                        .trim();
-                    
-                    // Don't remove too much - preserve song name structure
-                    // Only remove if query is too long
-                    if (searchQuery.length > 100) {
-                        searchQuery = searchQuery.substring(0, 100).trim();
+                await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `🔍 To'liq versiyasi qidirilmoqda...`).catch(() => { });
+
+                // Clean title logic
+                let cleanTitle = result.title
+                    .replace(/#\S+/g, '') // Remove hashtags
+                    .replace(/\(shorts?\)/gi, '') // Remove (shorts)
+                    .replace(/shorts?/gi, '') // Remove "shorts" word
+                    .replace(/official video/gi, '')
+                    .replace(/music video/gi, '')
+                    .replace(/video by [^\s]+/gi, '') // Remove "Video by username"
+                    .replace(/reel by [^\s]+/gi, '') // Remove "Reel by username"
+                    .replace(/video by/gi, '')
+                    .replace(/reel by/gi, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                let searchArtist = result.uploader || '';
+
+                // If cleaned title is too short, use uploader name as fallback
+                if (cleanTitle.length < 2) {
+                    Logger.info('Clean title is empty, falling back to uploader name');
+                    if (result.uploader && result.uploader.length > 2) {
+                        cleanTitle = result.uploader;
+                        // If we fallback to uploader, don't use artist in query to avoid duplication "Artist Artist"
+                        searchArtist = '';
+                    } else {
+                        Logger.info('Uploader name is also too short, skipping full song search');
+                        // We can cleanup early here since we are done
+                        if (fs.existsSync(result.filePath)) fs.unlinkSync(result.filePath);
+                        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+                        await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
+                        return;
                     }
                 }
 
-                if (searchQuery && searchQuery.length > 3) {
-                    try {
-                        Logger.info(`Searching for full version: "${searchQuery}" (original duration: ${Math.round(originalDuration)}s)`);
-                        
-                    // Try multiple search strategies for better results (reduced for speed)
-                    const searchStrategies = [
-                        searchQuery, // Original query
-                        `${searchQuery} official audio` // Add "official audio" (most common)
-                    ];
-                    
-                    let fullAudioSent = false;
-                    
-                    for (const strategy of searchStrategies) {
-                        if (fullAudioSent) break; // Already found, no need to continue
-                        
-                        try {
-                            Logger.info(`Trying search strategy: "${strategy}"`);
-                            // Search for fewer results for speed (5 instead of 10)
-                            const searchResults = await MusicService.search(strategy, 5);
+                Logger.info(`Attempting to find full version for: ${searchArtist} ${cleanTitle}`);
 
-                                if (searchResults.length > 0) {
-                                    // Get original video title and uploader for better matching
-                                    const originalTitle = (result.title || info.title || '').toLowerCase();
-                                    const originalUploader = (result.uploader || info.uploader || '').toLowerCase();
-                                    
-                                    // Filter and rank results by:
-                                    // 1. Exact title match with original (highest priority)
-                                    // 2. Title similarity with search query
-                                    // 3. Duration should be longer than original (full version)
-                                    // 4. Uploader match
-                                    // 5. Keywords that indicate full version
-                                    const rankedResults = searchResults
-                                        .map(searchResult => {
-                                            let score = 0;
-                                            const titleLower = searchResult.title.toLowerCase();
-                                            const queryLower = searchQuery.toLowerCase();
-                                            const uploaderLower = searchResult.uploader.toLowerCase();
-                                            
-                                            // 1. EXACT TITLE MATCH - Highest priority (must match original video title)
-                                            // Remove common suffixes from both titles for comparison
-                                            const cleanOriginalTitle = originalTitle
-                                                .replace(/\s*\(.*?\)/g, '')
-                                                .replace(/\s*\[.*?\]/g, '')
-                                                .replace(/\s*-\s*(official|lyrics|audio|video|hd|4k|1080p|720p).*/i, '')
-                                                .trim();
-                                            
-                                            const cleanResultTitle = titleLower
-                                                .replace(/\s*\(.*?\)/g, '')
-                                                .replace(/\s*\[.*?\]/g, '')
-                                                .replace(/\s*-\s*(official|lyrics|audio|video|hd|4k|1080p|720p).*/i, '')
-                                                .trim();
-                                            
-                                            // Check if titles match (allowing for minor differences)
-                                            if (cleanResultTitle === cleanOriginalTitle || 
-                                                cleanResultTitle.includes(cleanOriginalTitle) ||
-                                                cleanOriginalTitle.includes(cleanResultTitle)) {
-                                                score += 100; // Very high score for exact match
-                                            }
-                                            
-                                            // 2. Title similarity with search query
-                                            const queryWords = queryLower.split(' ').filter(w => w.length > 2);
-                                            const titleWords = titleLower.split(' ');
-                                            const matchingWords = queryWords.filter(qw => 
-                                                titleWords.some(tw => tw.includes(qw) || qw.includes(tw))
-                                            );
-                                            score += matchingWords.length * 10; // Increased weight
-                                            
-                                            // 3. Duration check - full version should be longer
-                                            const resultDuration = parseDuration(searchResult.duration);
-                                            if (resultDuration > originalDuration * 0.9) { // At least 90% of original or longer
-                                                score += 15;
-                                            }
-                                            if (resultDuration > originalDuration * 1.2) { // 20% longer = likely full version
-                                                score += 25;
-                                            }
-                                            if (resultDuration > originalDuration * 2) { // Much longer = definitely full version
-                                                score += 30;
-                                            }
-                                            
-                                            // 4. Uploader match (bonus if same uploader)
-                                            if (originalUploader && uploaderLower.includes(originalUploader) || 
-                                                originalUploader.includes(uploaderLower)) {
-                                                score += 20;
-                                            }
-                                            
-                                            // 5. Keywords that indicate full version
-                                            if (titleLower.includes('official') && titleLower.includes('audio')) {
-                                                score += 20; // Both keywords = very likely
-                                            } else if (titleLower.includes('official') || titleLower.includes('audio')) {
-                                                score += 10;
-                                            }
-                                            if (titleLower.includes('full') || titleLower.includes('complete')) {
-                                                score += 15;
-                                            }
-                                            
-                                            // 6. Penalize short clips, remixes, covers (unless explicitly searched)
-                                            if (titleLower.includes('clip') || titleLower.includes('short') || titleLower.includes('excerpt')) {
-                                                score -= 30;
-                                            }
-                                            if (titleLower.includes('cover') && !queryLower.includes('cover')) {
-                                                score -= 25;
-                                            }
-                                            if (titleLower.includes('remix') && !queryLower.includes('remix')) {
-                                                score -= 20;
-                                            }
-                                            if (titleLower.includes('live') && !queryLower.includes('live')) {
-                                                score -= 15; // Prefer studio version
-                                            }
-                                            
-                                            return { ...searchResult, score, duration: resultDuration };
-                                        })
-                                        .filter(r => r.score > 20) // Only keep results with meaningful score
-                                        .sort((a, b) => b.score - a.score); // Sort by score descending
-                                    
-                                    Logger.info(`Found ${rankedResults.length} ranked results, trying top ${Math.min(3, rankedResults.length)}`);
-                                    
-                                // Try top 2 ranked results (reduced for speed)
-                                for (const searchResult of rankedResults.slice(0, 2)) {
-                                        try {
-                                            const fullMusicUrl = searchResult.url;
-                                            Logger.info(`Trying to download: ${searchResult.title} (score: ${searchResult.score}, duration: ${searchResult.duration}s)`);
-                                            
-                                            // Download full audio from Youtube (audio only, no progress for speed)
-                                            const fullAudioResult = await YoutubeService.handleLink(fullMusicUrl, true);
+                // We use findFullVersion which tries multiple patterns
+                const fullVersion = await YoutubeService.findFullVersion(searchArtist, cleanTitle);
 
-                                            await ctx.replyWithAudio({ source: fullAudioResult.filePath }, {
-                                                title: `🎵 ${searchResult.title}`,
-                                                performer: searchResult.uploader,
-                                                caption: "🎵 To'liq musiqa"
-                                            });
-
-                                            if (fs.existsSync(fullAudioResult.filePath)) fs.unlinkSync(fullAudioResult.filePath);
-                                            fullAudioSent = true;
-                                            Logger.info(`Successfully sent full version: ${searchResult.title}`);
-                                            break; // Success, no need to try other results
-                                        } catch (err) {
-                                            Logger.warn(`Failed to download full version from ${searchResult.url}, trying next result...`);
-                                            continue; // Try next result
-                                        }
-                                    }
-                                }
-                            } catch (strategyError) {
-                                Logger.warn(`Search strategy "${strategy}" failed, trying next...`);
-                                continue;
-                            }
-                        }
-                        
-                        // If no full audio was sent after trying all strategies
-                        if (!fullAudioSent) {
-                            Logger.info(`All search strategies failed for: ${searchQuery}`);
-                            // User'ga xabar yuborish
-                            await ctx.reply('😔 To\'liq musiqa topilmadi yoki yuklab bo\'lmadi. Uzur!').catch(() => {});
-                        }
-                    } catch (searchError) {
-                        Logger.error('Error searching for full version', searchError);
-                        // User'ga xabar yuborish
-                        await ctx.reply('😔 To\'liq musiqa qidirishda xatolik yuz berdi. Uzur!').catch(() => {});
-                    }
+                if (fullVersion) {
+                    await ctx.replyWithAudio({ source: fullVersion.filePath }, {
+                        title: `⭐️ ${fullVersion.title}`,
+                        performer: fullVersion.uploader,
+                        caption: "⭐️ To'liq versiyasi (@SonexMusicBot)"
+                    });
+                    // Cleanup full version file
+                    if (fs.existsSync(fullVersion.filePath)) fs.unlinkSync(fullVersion.filePath);
                 } else {
-                    Logger.info('No music metadata found, skipping full version search');
-                    // User'ga xabar yuborish - metadata topilmadi (faqat agar Instagram bo'lsa)
-                    if (isInstagram) {
-                        await ctx.reply('😔 Video\'dan musiqa ma\'lumotlari topilmadi. To\'liq versiyani qidirib bo\'lmadi. Uzur!').catch(() => {});
-                    }
+                    // Silent fail - user already has the short version
+                    Logger.info('Full version not found (silent)');
                 }
-            } catch (searchErr: any) {
-                Logger.error('Error finding full version for Instagram link', searchErr);
-                // Don't fail the whole operation if music search fails
-                // The extracted audio from video is already sent
+            } catch (err) {
+                Logger.warn('Full version search failed', err);
+                // We don't spam the user with errors for this optional step
             }
         }
 
-        // Cleanup (only if we haven't returned early for full song)
-        // Cleanup in parallel for speed (don't wait)
-        Promise.all([
-            fs.existsSync(result.filePath) ? fs.promises.unlink(result.filePath).catch(() => {}) : Promise.resolve(),
-            fs.existsSync(audioPath) ? fs.promises.unlink(audioPath).catch(() => {}) : Promise.resolve(),
-            ctx.deleteMessage(statusMsg.message_id).catch(() => {})
-        ]).catch(() => {});
+        // Cleanup
+        if (fs.existsSync(result.filePath)) fs.unlinkSync(result.filePath);
+        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+
+        await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
+
     } catch (e: any) {
         Logger.error('Media delivery error', e);
-        
+
         // Provide user-friendly error messages
         let errorMessage = `❌ Xatolik: ${e.message || 'Noma\'lum xatolik'}`;
-        
+
         // Clean up any partial downloads
         try {
             // This is a best-effort cleanup, errors here are not critical
         } catch (cleanupErr) {
             Logger.error('Error during cleanup', cleanupErr);
         }
-        
+
         await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, errorMessage).catch(() => { });
     }
 };
@@ -537,13 +301,13 @@ export const messageHandler = async (ctx: any) => {
 
             if (matches && matches.length > 0) {
                 const url = matches[0];
-                
+
                 // Validate Instagram URLs before processing
                 if (url.includes('instagram.com') && !InstagramService.isValidInstagramUrl(url)) {
                     await ctx.reply('❌ Noto\'g\'ri Instagram havolasi. Iltimos, to\'g\'ri Instagram post, reel yoki video havolasini yuboring.\n\nMasalan:\n• https://www.instagram.com/reel/...\n• https://www.instagram.com/p/...\n• https://www.instagram.com/tv/...');
                     return;
                 }
-                
+
                 const statusMsg = await ctx.reply('🚀 Havola tahlil qilinmoqda...');
                 await handleMediaDelivery(url, ctx, statusMsg);
                 return;
@@ -568,15 +332,15 @@ export const messageHandler = async (ctx: any) => {
                 const fileInfo = await ctx.telegram.getFile(fileId);
                 const fileSizeBytes = fileInfo.file_size || 0;
                 const fileSizeGB = fileSizeBytes / (1024 * 1024 * 1024);
-                
+
                 // Check if it's a video file and size is > 2GB
                 if ((video || (document && document.mime_type?.startsWith('video/'))) && fileSizeGB > 2) {
-                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, 
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
                         `❌ Video juda katta (${fileSizeGB.toFixed(2)}GB). 2GB dan oshib ketdi. Iltimos, kichikroq video yuboring.`
                     );
                     return;
                 }
-                
+
                 // If video is between 1GB and 2GB, ask user if they want to extract all songs
                 if ((video || (document && document.mime_type?.startsWith('video/'))) && fileSizeGB >= 1 && fileSizeGB <= 2) {
                     const link = await ctx.telegram.getFileLink(fileId);
@@ -584,14 +348,14 @@ export const messageHandler = async (ctx: any) => {
                     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
                     const fileName = (document?.file_name || video?.file_name || 'temp_media') + (video ? '.mp4' : '');
                     const tempFilePath = path.join(tempDir, fileName);
-                    
+
                     // Store file path in session for later processing
                     if (!session[ctx.chat.id]) {
                         session[ctx.chat.id] = { results: [], page: 0, query: '' };
                     }
                     session[ctx.chat.id].tempVideoPath = tempFilePath;
                     session[ctx.chat.id].fileLink = link.href;
-                    
+
                     await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
                         `📹 Video hajmi: ${fileSizeGB.toFixed(2)}GB\n\n` +
                         `Rostan ham shu video'dagi barcha musiqalarni topmoqchimisiz?`,
@@ -602,7 +366,7 @@ export const messageHandler = async (ctx: any) => {
                     );
                     return;
                 }
-                
+
                 // For smaller videos or audio files, process normally
                 const link = await ctx.telegram.getFileLink(fileId);
                 const tempDir = path.join(process.cwd(), 'downloads', 'temp');
@@ -658,33 +422,34 @@ export const callbackHandler = async (ctx: any) => {
     }
 
     if (data.startsWith('select_')) {
-        const id = data.split('_')[1];
+        // Extract video ID - handle IDs that contain underscores
+        const id = data.substring('select_'.length); // Get everything after 'select_'
         const url = `https://www.youtube.com/watch?v=${id}`;
         await ctx.answerCbQuery('Musiqa tayyorlanmoqda...');
         const statusMsg = await ctx.reply('🚀 Yuklab olinmoqda...');
         await handleMediaDelivery(url, ctx, statusMsg);
     }
-    
+
     if (data.startsWith('extract_all_songs_')) {
         const targetChatId = parseInt(data.split('_')[3]);
         if (targetChatId !== chatId) {
             await ctx.answerCbQuery('Bu sizning xabaringiz emas!');
             return;
         }
-        
+
         await ctx.answerCbQuery('Kutilib turing...');
         await ctx.editMessageText('⏳ Video tahlil qilinmoqda, kutilib turing...');
-        
+
         try {
             const sessionData = session[chatId];
             if (!sessionData?.tempVideoPath || !sessionData?.fileLink) {
                 await ctx.reply('❌ Xatolik: Video ma\'lumotlari topilmadi. Iltimos, qayta yuboring.');
                 return;
             }
-            
+
             const tempFilePath = sessionData.tempVideoPath;
             const fileLink = sessionData.fileLink;
-            
+
             // Download video if not already downloaded
             if (!fs.existsSync(tempFilePath)) {
                 const statusMsg = await ctx.reply('📥 Video yuklab olinmoqda...');
@@ -692,29 +457,29 @@ export const callbackHandler = async (ctx: any) => {
                 const writer = fs.createWriteStream(tempFilePath);
                 response.data.pipe(writer);
                 await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
-                await ctx.deleteMessage(statusMsg.message_id).catch(() => {});
+                await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
             }
-            
+
             const statusMsg = await ctx.reply('🔍 Videodagi musiqalar topilmoqda, kutilib turing...');
-            
+
             // Extract songs from video
             const detectedSongs = await VideoSongsService.extractSongsFromVideo(tempFilePath);
-            
+
             if (detectedSongs.length === 0) {
-            await ctx.telegram.editMessageText(
-                chatId,
-                statusMsg.message_id,
-                undefined,
-                '😔 Videodan hech qanday musiqa topilmadi.\n\n' +
-                'Bu video metadata yoki descriptionda musiqa ma\'lumotlari bo\'lmasligi mumkin.\n\n' +
-                'Faqat audioni ajratish uchun quyidagi tugmani bosing:',
-                Markup.inlineKeyboard([
-                    [Markup.button.callback('🎵 Faqat audioni ajrat', `extract_single_audio_${chatId}`)]
-                ])
-            );
+                await ctx.telegram.editMessageText(
+                    chatId,
+                    statusMsg.message_id,
+                    undefined,
+                    '😔 Videodan hech qanday musiqa topilmadi.\n\n' +
+                    'Bu video metadata yoki descriptionda musiqa ma\'lumotlari bo\'lmasligi mumkin.\n\n' +
+                    'Faqat audioni ajratish uchun quyidagi tugmani bosing:',
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('🎵 Faqat audioni ajrat', `extract_single_audio_${chatId}`)]
+                    ])
+                );
                 return;
             }
-            
+
             await ctx.telegram.editMessageText(
                 chatId,
                 statusMsg.message_id,
@@ -722,43 +487,43 @@ export const callbackHandler = async (ctx: any) => {
                 `✅ ${detectedSongs.length} ta musiqa topildi!\n\n` +
                 'Endi ularning to\'liq versiyalarini yuklab olamiz...'
             );
-            
+
             // Find and download full versions
             await VideoSongsService.findAndDownloadFullSongs(detectedSongs, ctx, statusMsg);
-            
+
             // Cleanup
             if (fs.existsSync(tempFilePath)) {
                 fs.unlinkSync(tempFilePath);
             }
             delete session[chatId].tempVideoPath;
             delete session[chatId].fileLink;
-            
+
         } catch (error: any) {
             Logger.error('Error extracting all songs', error);
-            await ctx.reply(`❌ Xatolik: ${error.message || 'Noma\'lum xatolik'}`).catch(() => {});
+            await ctx.reply(`❌ Xatolik: ${error.message || 'Noma\'lum xatolik'}`).catch(() => { });
         }
     }
-    
+
     if (data.startsWith('extract_single_audio_')) {
         const targetChatId = parseInt(data.split('_')[3]);
         if (targetChatId !== chatId) {
             await ctx.answerCbQuery('Bu sizning xabaringiz emas!');
             return;
         }
-        
+
         await ctx.answerCbQuery('Kutilib turing...');
         await ctx.editMessageText('🎵 Musiqa ajratib olinmoqda...');
-        
+
         try {
             const sessionData = session[chatId];
             if (!sessionData?.tempVideoPath || !sessionData?.fileLink) {
                 await ctx.reply('❌ Xatolik: Video ma\'lumotlari topilmadi. Iltimos, qayta yuboring.');
                 return;
             }
-            
+
             const tempFilePath = sessionData.tempVideoPath;
             const fileLink = sessionData.fileLink;
-            
+
             // Download video if not already downloaded
             if (!fs.existsSync(tempFilePath)) {
                 const statusMsg = await ctx.reply('📥 Video yuklab olinmoqda...');
@@ -766,24 +531,24 @@ export const callbackHandler = async (ctx: any) => {
                 const writer = fs.createWriteStream(tempFilePath);
                 response.data.pipe(writer);
                 await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
-                await ctx.deleteMessage(statusMsg.message_id).catch(() => {});
+                await ctx.deleteMessage(statusMsg.message_id).catch(() => { });
             }
-            
+
             // Extract audio
             const audioPath = await AudioService.extractAudio(tempFilePath);
             await ctx.replyWithAudio({ source: audioPath });
-            
+
             // Cleanup
             if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
             if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-            await ctx.deleteMessage().catch(() => {});
-            
+            await ctx.deleteMessage().catch(() => { });
+
             delete session[chatId].tempVideoPath;
             delete session[chatId].fileLink;
-            
+
         } catch (error: any) {
             Logger.error('Error extracting single audio', error);
-            await ctx.reply(`❌ Xatolik: ${error.message || 'Noma\'lum xatolik'}`).catch(() => {});
+            await ctx.reply(`❌ Xatolik: ${error.message || 'Noma\'lum xatolik'}`).catch(() => { });
         }
     }
 };
