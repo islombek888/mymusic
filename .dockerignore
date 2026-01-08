@@ -1,15 +1,31 @@
+# Dependencies
 node_modules
 npm-debug.log
+
+# Environment
 .env
 .env.local
+
+# Build output
 dist
+
+# Media & Downloads
 downloads
+*.mp3
+*.mp4
+*.webm
+
+# Source Control
 .git
-
 .gitignore
-*.md
 
+# IDE & OS
 .DS_Store
+.vscode
+.idea
+
+# Documentation & Tests
+*.md
 tests
 scripts
-
+coverage
