@@ -5,6 +5,7 @@ npm-debug.log
 dist
 downloads
 .git
+
 .gitignore
 *.md
 

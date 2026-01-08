@@ -5,7 +5,8 @@ dist
 
 
 # Environment and sensitive files
-.env
+
+
 .env.local
 
 # Cookie files
