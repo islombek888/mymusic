@@ -37,7 +37,8 @@ RUN apt-get update && apt-get install -y \
 # ===============================
 # Using the official binary release for stability and ease of update
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && yt-dlp --update-to latest
 
 # Configure yt-dlp cache directories for limited user environments (like Render)
 ENV XDG_CACHE_HOME=/tmp/.cache

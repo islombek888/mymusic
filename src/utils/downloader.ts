@@ -126,12 +126,15 @@ export class Downloader {
             lower.includes('use --cookies') ||
             lower.includes('login required') ||
             lower.includes('confirm you\'re not a bot') ||
-            lower.includes('confirm that you are not a bot')
+            lower.includes('confirm that you are not a bot') ||
+            lower.includes('failed to extract any player response') ||
+            lower.includes('player response') ||
+            lower.includes('please report this issue')
         ) {
             // Detect if it's YouTube or Instagram
             if (lower.includes('youtube') || lower.includes('yt-dlp')) {
-                Logger.error('YouTube auth required: set YT_COOKIES_B64 or YT_COOKIES_PATH on the server to enable downloads.');
-                return 'YouTube videosida vaqtinchalik cheklov bor. Iltimos, birozdan keyin qayta urinib ko\'ring yoki boshqa video yuboring.';
+                Logger.error('YouTube player extraction failed or auth required');
+                return 'YouTube videosida vaqtinchalik texnik muammo. Iltimos, 5-10 daqiqadan so\'ng qayta urinib ko\'ring yoki boshqa video yuboring.';
             } else {
                 Logger.error('Instagram auth/rate-limit: set IG_COOKIES_B64 or IG_COOKIES_PATH on the server to enable downloads.');
                 return 'Instagram kontentini yuklab bo\'lmadi: login/cookies kerak yoki vaqtinchalik cheklov (rate-limit). Iltimos, birozdan keyin urinib ko\'ring yoki boshqa link yuboring.';
@@ -191,8 +194,8 @@ export class Downloader {
                 args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
                 args.push('--cookies', cookiesPath);
             } else {
-                // Aggressive cookie-free strategy
-                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js,configs');
+                // Aggressive cookie-free strategy with multiple fallbacks
+                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=webpage,js,configs,player');
                 // Use mobile user agent to avoid bot detection
                 args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
                 // Add additional headers to look more like a real mobile client
@@ -203,6 +206,10 @@ export class Downloader {
                 args.push('--add-header', 'sec-fetch-mode:navigate');
                 args.push('--add-header', 'sec-fetch-site:same-origin');
                 args.push('--add-header', 'sec-fetch-user:?1');
+                // Add more retries and timeout for YouTube issues
+                args.push('--extractor-retries', '5');
+                args.push('--fragment-retries', '10');
+                args.push('--retry-sleep', '1');
             }
         }
 
@@ -261,10 +268,11 @@ export class Downloader {
         } catch (error: any) {
             const errorOutput = (error?.stderr || error?.stdout || error?.message || '').toString();
 
-            // RETRY MECHANISM: If YouTube auth failed and we haven't retried without cookies yet
+            // RETRY MECHANISM: If YouTube auth failed or player extraction failed and we haven't retried without cookies yet
             if (!retryWithoutCookies && !isInstagram && isYouTube &&
-                (errorOutput.includes('Sign in') || errorOutput.includes('cookies') || errorOutput.includes('bot'))) {
-                Logger.warn('YouTube auth failed with cookies, retrying without cookies...');
+                (errorOutput.includes('Sign in') || errorOutput.includes('cookies') || errorOutput.includes('bot') || 
+                 errorOutput.includes('failed to extract any player response') || errorOutput.includes('player response'))) {
+                Logger.warn('YouTube player extraction failed, retrying with different strategy...');
                 return this.getInfo(url, isInstagram, true);
             }
 
@@ -332,8 +340,8 @@ export class Downloader {
                 args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
                 args.push('--cookies', cookiesPath);
             } else {
-                // Aggressive cookie-free strategy
-                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js,configs');
+                // Aggressive cookie-free strategy with multiple fallbacks
+                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=webpage,js,configs,player');
                 // Use mobile user agent to avoid bot detection
                 args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
                 // Add additional headers to look more like a real mobile client
@@ -344,6 +352,10 @@ export class Downloader {
                 args.push('--add-header', 'sec-fetch-mode:navigate');
                 args.push('--add-header', 'sec-fetch-site:same-origin');
                 args.push('--add-header', 'sec-fetch-user:?1');
+                // Add more retries and timeout for YouTube issues
+                args.push('--extractor-retries', '5');
+                args.push('--fragment-retries', '10');
+                args.push('--retry-sleep', '1');
             }
         }
 
@@ -425,9 +437,10 @@ export class Downloader {
                     const raw = stderr.substring(0, 2000);
 
                     // RETRY MECHANISM for DOWNLOAD
-                    // If we haven't skipped cookies yet, and it's a YouTube Sign in error
+                    // If we haven't skipped cookies yet, and it's a YouTube Sign in or player extraction error
                     if (!skipCookies && isYouTube &&
-                        (raw.includes('Sign in') || raw.includes('cookies') || raw.includes('bot'))) {
+                        (raw.includes('Sign in') || raw.includes('cookies') || raw.includes('bot') || 
+                         raw.includes('failed to extract any player response') || raw.includes('player response'))) {
                         Logger.warn('YouTube download failed with cookies, attempting retry without cookies...');
                         // Recursive retry without cookies
                         const newOptions = { ...options, skipCookies: true };
