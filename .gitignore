@@ -12,4 +12,5 @@ dist
 # Cookie files
 *_cookies.txt
 youtube_cookies.txt
+.env
 instagram_cookies.txt
