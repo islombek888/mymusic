@@ -131,7 +131,7 @@ export class Downloader {
             // Detect if it's YouTube or Instagram
             if (lower.includes('youtube') || lower.includes('yt-dlp')) {
                 Logger.error('YouTube auth required: set YT_COOKIES_B64 or YT_COOKIES_PATH on the server to enable downloads.');
-                return 'YouTube kontentiga kirish uchun autentifikatsiya kerak. Iltimos, boshqa video havolasini sinab ko\'ring yoki birozdan keyin qayta urinib ko\'ring.';
+                return 'YouTube videosida vaqtinchalik cheklov bor. Iltimos, birozdan keyin qayta urinib ko\'ring yoki boshqa video yuboring.';
             } else {
                 Logger.error('Instagram auth/rate-limit: set IG_COOKIES_B64 or IG_COOKIES_PATH on the server to enable downloads.');
                 return 'Instagram kontentini yuklab bo\'lmadi: login/cookies kerak yoki vaqtinchalik cheklov (rate-limit). Iltimos, birozdan keyin urinib ko\'ring yoki boshqa link yuboring.';
@@ -183,8 +183,7 @@ export class Downloader {
                 args.push('--cookies', cookiesPath);
             }
         } else if (isYouTube) {
-            // YouTube - Android client is more stable and less likely to trigger "Sign in" errors
-            // We prioritize android, then ios, then web (as web often requires strict cookies)
+            // YouTube - Try multiple strategies to avoid "Sign in" errors
             // If retryWithoutCookies is true, force skipping cookies
             const cookiesPath = !retryWithoutCookies ? this.getYouTubeCookiesPath() : null;
 
@@ -192,11 +191,19 @@ export class Downloader {
                 args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
                 args.push('--cookies', cookiesPath);
             } else {
-                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js');
+                // Aggressive cookie-free strategy
+                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js,configs');
+                // Use mobile user agent to avoid bot detection
+                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
+                // Add additional headers to look more like a real mobile client
+                args.push('--add-header', 'accept-language:en-US,en;q=0.9');
+                args.push('--add-header', 'accept-encoding:gzip, deflate, br');
+                args.push('--add-header', 'dnt:1');
+                args.push('--add-header', 'sec-fetch-dest:video');
+                args.push('--add-header', 'sec-fetch-mode:navigate');
+                args.push('--add-header', 'sec-fetch-site:same-origin');
+                args.push('--add-header', 'sec-fetch-user:?1');
             }
-
-            // Standard user agent to look like a real browser
-            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         }
 
         args.push(url);
@@ -317,8 +324,7 @@ export class Downloader {
                 args.push('--cookies', cookiesPath);
             }
         } else if (isYouTube) {
-            // YouTube - Android client is more stable and less likely to trigger "Sign in" errors
-            // We prioritize android, then ios, then web (as web often requires strict cookies)
+            // YouTube - Try multiple strategies to avoid "Sign in" errors
             // If skipCookies is true, force skipping cookies
             const cookiesPath = !skipCookies ? this.getYouTubeCookiesPath() : null;
 
@@ -326,11 +332,19 @@ export class Downloader {
                 args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
                 args.push('--cookies', cookiesPath);
             } else {
-                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js');
+                // Aggressive cookie-free strategy
+                args.push('--extractor-args', 'youtube:player_client=android,ios;player_skip=webpage,js,configs');
+                // Use mobile user agent to avoid bot detection
+                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
+                // Add additional headers to look more like a real mobile client
+                args.push('--add-header', 'accept-language:en-US,en;q=0.9');
+                args.push('--add-header', 'accept-encoding:gzip, deflate, br');
+                args.push('--add-header', 'dnt:1');
+                args.push('--add-header', 'sec-fetch-dest:video');
+                args.push('--add-header', 'sec-fetch-mode:navigate');
+                args.push('--add-header', 'sec-fetch-site:same-origin');
+                args.push('--add-header', 'sec-fetch-user:?1');
             }
-
-            // Standard user agent to look like a real browser
-            args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         }
 
         args.push(url);
