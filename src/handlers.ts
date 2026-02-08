@@ -6,6 +6,7 @@ import { InstagramService } from './services/instagram.service.js';
 import { AudioService } from './services/audio.service.js';
 import { VideoSongsService } from './services/video-songs.service.js';
 import { Downloader } from './utils/downloader.js';
+import { RecognitionService } from './services/recognition.service.js';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
@@ -112,13 +113,14 @@ const handleMediaDelivery = async (url: string, ctx: any, statusMsg: any) => {
         // 2. Wait for audio extraction
         const audioPath = await audioExtractionPromise;
 
-        await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `✅ Tayyor! Audio yuborilmoqda...`).catch(() => { });
+        const sourceEmoji = url.includes('soundcloud') ? '☁️' : url.includes('audiomack') ? '🎵' : url.includes('instagram') ? '📸' : '🎶';
+        await ctx.telegram.editMessageText(chatId, statusMsg.message_id, undefined, `${sourceEmoji} Tayyor! Audio yuborilmoqda...`).catch(() => { });
 
         // 3. ALWAYS send audio from the video first (Fast)
         await ctx.replyWithAudio({ source: audioPath }, {
             title: `🎵 ${result.title}`,
             performer: result.uploader,
-            caption: "🎵 Musiqa (@SonexMusicBot)"
+            caption: `🎵 Musiqa (${sourceEmoji} ${result.source || 'Bot'})\n\n@SonexMusicBot`
         });
 
         // 4. Smart Full Song Recovery (Senior Logic)
@@ -268,9 +270,10 @@ const sendSearchResults = async (ctx: any, results: SearchResult[], page: number
     const currentResults = results.slice(start, end);
 
     let text = `🔍 **Qidiruv natijalari** (${page + 1}/${Math.ceil(results.length / pageSize)}):\n\n`;
-    const buttons = currentResults.map((res, i) => [
-        Markup.button.callback(`${start + i + 1}. ${res.title} (${res.duration})`, `select_${res.id}`)
-    ]);
+    const buttons = currentResults.map((res, i) => {
+        const platformIcon = res.source === 'youtube' ? '🔴' : res.source === 'soundcloud' ? '🟠' : res.source === 'audiomack' ? '🟡' : '🎵';
+        return [Markup.button.callback(`${start + i + 1}. ${platformIcon} ${res.title} (${res.duration})`, `select_${res.id}_${res.source}`)];
+    });
 
     const navButtons = [];
     if (page > 0) navButtons.push(Markup.button.callback('⬅️ Orqaga', `page_${page - 1}`));
@@ -325,13 +328,61 @@ export const messageHandler = async (ctx: any) => {
             return;
         }
 
-        if (video || audio || document) {
-            const statusMsg = await ctx.reply('📥 Fayl yuklab olinmoqda...');
+        if (video || audio || document || ctx.message?.voice || ctx.message?.video_note) {
+            const statusMsg = await ctx.reply('📥 Fayl tahlil qilinmoqda...');
             try {
-                const fileId = video?.file_id || audio?.file_id || document?.file_id;
+                const voice = ctx.message?.voice;
+                const videoNote = ctx.message?.video_note;
+                const fileId = video?.file_id || audio?.file_id || document?.file_id || voice?.file_id || videoNote?.file_id;
+
                 const fileInfo = await ctx.telegram.getFile(fileId);
                 const fileSizeBytes = fileInfo.file_size || 0;
                 const fileSizeGB = fileSizeBytes / (1024 * 1024 * 1024);
+
+                // Check for identification (voice or short audio/video)
+                const isSnippet = voice || videoNote || (audio && audio.duration < 60) || (video && video.duration < 60);
+
+                if (isSnippet) {
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '🔍 Qo\'shiq tanilmoqda... (Shazam logic)');
+                    const link = await ctx.telegram.getFileLink(fileId);
+                    const tempDir = path.join(process.cwd(), 'downloads', 'temp');
+                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+                    const tempFilePath = path.join(tempDir, `snippet_${Date.now()}.mp3`);
+
+                    // Download the snippet
+                    const response = await axios.get(link.href, { responseType: 'stream' });
+                    const writer = fs.createWriteStream(tempFilePath);
+                    response.data.pipe(writer);
+                    await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+
+                    // Convert to MP3 if needed (voice is often OGG)
+                    let recognitionPath = tempFilePath;
+                    if (voice || videoNote) {
+                        recognitionPath = await AudioService.extractAudio(tempFilePath);
+                    }
+
+                    const identified = await RecognitionService.identify(recognitionPath);
+
+                    if (identified) {
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, `✅ Topildi: **${identified.artist} - ${identified.title}**\n\nTo'liq versiyasi yuklanmoqda...`, { parse_mode: 'Markdown' });
+
+                        // Search and deliver
+                        const query = `${identified.artist} ${identified.title}`;
+                        const results = await MusicService.search(query, 1);
+                        if (results.length > 0) {
+                            await handleMediaDelivery(results[0].url, ctx, statusMsg);
+                        } else {
+                            await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, `😔 Qo'shiq topildi, lekin yuklab bo'lmadi: ${query}`);
+                        }
+                    } else {
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '😔 Afsuski, bu qo\'shiqni tani olmadim. Iltimos, aniqroq qismini yuboring.');
+                    }
+
+                    // Cleanup
+                    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                    if (recognitionPath !== tempFilePath && fs.existsSync(recognitionPath)) fs.unlinkSync(recognitionPath);
+                    return;
+                }
 
                 // Check if it's a video file and size is > 2GB
                 if ((video || (document && document.mime_type?.startsWith('video/'))) && fileSizeGB > 2) {
@@ -422,9 +473,21 @@ export const callbackHandler = async (ctx: any) => {
     }
 
     if (data.startsWith('select_')) {
-        // Extract video ID - handle IDs that contain underscores
-        const id = data.substring('select_'.length); // Get everything after 'select_'
-        const url = `https://www.youtube.com/watch?v=${id}`;
+        // Handle platform source in callback
+        const parts = data.split('_');
+        const id = parts[1];
+        const source = parts[2] || 'youtube';
+
+        let url = '';
+        if (source === 'youtube') url = `https://www.youtube.com/watch?v=${id}`;
+        else if (source === 'soundcloud') url = `https://soundcloud.com/${id}`; // Simplified, yt-dlp might need full URL but search result should provide it
+
+        // Find existing result to get full URL if it's not YouTube
+        if (session[chatId]) {
+            const found = session[chatId].results.find(r => r.id === id);
+            if (found) url = found.url;
+        }
+
         await ctx.answerCbQuery('Musiqa tayyorlanmoqda...');
         const statusMsg = await ctx.reply('🚀 Yuklab olinmoqda...');
         await handleMediaDelivery(url, ctx, statusMsg);

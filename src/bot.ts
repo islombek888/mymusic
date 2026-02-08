@@ -40,20 +40,20 @@ bot.on('callback_query', callbackHandler);
 // Global Error Handler
 bot.catch((err: any, ctx) => {
     Logger.error(`Ooops, encountered an error for ${ctx.updateType}`, err);
-    
+
     // Try to provide a more helpful error message
     let errorMessage = 'Kutilmagan xatolik yuz berdi. Iltimos birozdan so\'ng urinib ko\'ring.';
-    
+
     if (err.message) {
         // If it's already a user-friendly error, use it
-        if (err.message.includes('Instagram') || 
-            err.message.includes('yopiq') || 
+        if (err.message.includes('Instagram') ||
+            err.message.includes('yopiq') ||
             err.message.includes('topilmadi') ||
             err.message.includes('noto\'g\'ri')) {
             errorMessage = err.message;
         }
     }
-    
+
     ctx.reply(errorMessage).catch(() => {
         // If even sending the error message fails, log it
         Logger.error('Failed to send error message to user', err);

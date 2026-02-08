@@ -9,7 +9,10 @@ export interface DownloadOptions {
     onProgress?: (progress: string) => void;
     isInstagram?: boolean;
     skipCookies?: boolean;
+    identity?: YouTubeIdentity;
 }
+
+export type YouTubeIdentity = 'desktop' | 'ios' | 'android' | 'tv' | 'android_vr' | 'web_embedded';
 
 export class Downloader {
     // Public methods for external access
@@ -61,7 +64,9 @@ export class Downloader {
         if (!b64 || !b64.trim()) return null;
 
         try {
-            const decoded = Buffer.from(b64, 'base64').toString('utf8');
+            // Clean up base64 string from potential whitespace or newlines
+            const cleanB64 = b64.replace(/\s/g, '');
+            const decoded = Buffer.from(cleanB64, 'base64').toString('utf8');
             const targetPath = '/tmp/ig-cookies.txt';
             fs.writeFileSync(targetPath, decoded, { encoding: 'utf8' });
             return targetPath;
@@ -81,7 +86,9 @@ export class Downloader {
         if (!b64 || !b64.trim()) return null;
 
         try {
-            const decoded = Buffer.from(b64, 'base64').toString('utf8');
+            // Clean up base64 string from potential whitespace or newlines
+            const cleanB64 = b64.replace(/\s/g, '');
+            const decoded = Buffer.from(cleanB64, 'base64').toString('utf8');
             const targetPath = '/tmp/yt-cookies.txt';
             fs.writeFileSync(targetPath, decoded, { encoding: 'utf8' });
             return targetPath;
@@ -134,7 +141,7 @@ export class Downloader {
             // Detect if it's YouTube or Instagram
             if (lower.includes('youtube') || lower.includes('yt-dlp')) {
                 Logger.error('YouTube player extraction failed or auth required');
-                return 'YouTube videosida vaqtinchalik texnik muammo. Iltimos, 5-10 daqiqadan so\'ng qayta urinib ko\'ring yoki boshqa video yuboring.';
+                return 'YouTube videosida vaqtinchalik texnik muammo (Sign in required). Iltimos, yangi COOKIE qo\'yib ko\'ring yoki 5-10 daqiqadan so\'ng qayta urinib ko\'ring.';
             } else {
                 Logger.error('Instagram auth/rate-limit: set IG_COOKIES_B64 or IG_COOKIES_PATH on the server to enable downloads.');
                 return 'Instagram kontentini yuklab bo\'lmadi: login/cookies kerak yoki vaqtinchalik cheklov (rate-limit). Iltimos, birozdan keyin urinib ko\'ring yoki boshqa link yuboring.';
@@ -160,8 +167,10 @@ export class Downloader {
         return 'Yuklab olishda xatolik yuz berdi. Iltimos, boshqa link bilan urinib ko\'ring.';
     }
 
-    static async getInfo(url: string, isInstagram: boolean = false, retryWithoutCookies: boolean = false): Promise<any> {
+    static async getInfo(url: string, isInstagram: boolean = false, retryIdentityIndex: number = 0): Promise<any> {
         const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+        const identities: YouTubeIdentity[] = ['desktop', 'ios', 'tv', 'android_vr', 'web_embedded'];
+        const currentIdentity = isYouTube ? identities[retryIdentityIndex] || 'ios' : 'ios';
 
         const args = [
             '--no-config',
@@ -170,7 +179,7 @@ export class Downloader {
             '--no-warnings',
             '--no-check-certificate',
             '--force-ipv4',
-            '--socket-timeout', '15',
+            '--socket-timeout', '20',
             '-j'
         ];
 
@@ -186,31 +195,38 @@ export class Downloader {
                 args.push('--cookies', cookiesPath);
             }
         } else if (isYouTube) {
-            // YouTube - Try multiple strategies to avoid "Sign in" errors
-            // If retryWithoutCookies is true, force skipping cookies
-            const cookiesPath = !retryWithoutCookies ? this.getYouTubeCookiesPath() : null;
+            // YouTube - Enhanced Multi-Identity Strategy
+            const cookiesPath = retryIdentityIndex === 0 ? this.getYouTubeCookiesPath() : null;
 
-            if (cookiesPath) {
-                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
-                args.push('--cookies', cookiesPath);
-            } else {
-                // Aggressive cookie-free strategy with multiple fallbacks
-                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=webpage,js,configs,player');
-                // Use mobile user agent to avoid bot detection
-                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
-                // Add additional headers to look more like a real mobile client
-                args.push('--add-header', 'accept-language:en-US,en;q=0.9');
-                args.push('--add-header', 'accept-encoding:gzip, deflate, br');
-                args.push('--add-header', 'dnt:1');
-                args.push('--add-header', 'sec-fetch-dest:video');
-                args.push('--add-header', 'sec-fetch-mode:navigate');
-                args.push('--add-header', 'sec-fetch-site:same-origin');
-                args.push('--add-header', 'sec-fetch-user:?1');
-                // Add more retries and timeout for YouTube issues
-                args.push('--extractor-retries', '5');
-                args.push('--fragment-retries', '10');
-                args.push('--retry-sleep', '1');
+            if (currentIdentity === 'desktop') {
+                // Desktop Identity: Good for general cookie-based access
+                args.push('--extractor-args', 'youtube:player_client=web;player_skip=configs,js');
+                args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+                args.push('--add-header', 'accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7');
+                args.push('--add-header', 'sec-ch-ua:"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"');
+                if (cookiesPath) args.push('--cookies', cookiesPath);
+            } else if (currentIdentity === 'ios') {
+                // iOS Identity: Very resilient mobile client
+                args.push('--extractor-args', 'youtube:player_client=ios;player_skip=webpage,js,configs');
+                args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1');
+                args.push('--add-header', 'accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+                args.push('--add-header', 'sec-fetch-dest:document');
             }
+            else if (currentIdentity === 'tv') {
+                // TV Identity: Skips many web bot checks
+                args.push('--extractor-args', 'youtube:player_client=tv;player_skip=webpage,js,configs');
+            } else if (currentIdentity === 'android_vr') {
+                // VR Identity: Extremely resilient to bot detection
+                args.push('--extractor-args', 'youtube:player_client=android_vr;player_skip=configs,js');
+                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/13.0.0.0.34.264752251 SamsungBrowser/4.0 Chrome/86.0.4240.198 Mobile Safari/537.36');
+            } else if (currentIdentity === 'web_embedded') {
+                // Embedded Identity: Often used in apps, less JS checks
+                args.push('--extractor-args', 'youtube:player_client=web_embedded;player_skip=configs,js');
+            }
+
+            // Shared YouTube args
+            args.push('--extractor-retries', '3');
+            args.push('--no-check-certificate');
         }
 
         args.push(url);
@@ -268,16 +284,16 @@ export class Downloader {
         } catch (error: any) {
             const errorOutput = (error?.stderr || error?.stdout || error?.message || '').toString();
 
-            // RETRY MECHANISM: If YouTube auth failed or player extraction failed and we haven't retried without cookies yet
-            if (!retryWithoutCookies && !isInstagram && isYouTube &&
-                (errorOutput.includes('Sign in') || errorOutput.includes('cookies') || errorOutput.includes('bot') || 
-                 errorOutput.includes('failed to extract any player response') || errorOutput.includes('player response'))) {
-                Logger.warn('YouTube player extraction failed, retrying with different strategy...');
-                return this.getInfo(url, isInstagram, true);
+            // RETRY MECHANISM: If YouTube auth failed or player extraction failed and we haven't tried all identities yet
+            if (isYouTube && retryIdentityIndex < identities.length - 1 &&
+                (errorOutput.includes('Sign in') || errorOutput.includes('cookies') || errorOutput.includes('bot') ||
+                    errorOutput.includes('failed to extract any player response') || errorOutput.includes('player response'))) {
+                Logger.warn(`YouTube bot detection triggered (Identity: ${currentIdentity}). Retrying with next identity...`);
+                return this.getInfo(url, isInstagram, retryIdentityIndex + 1);
             }
 
             Logger.error(`Error getting info for ${url}`, error);
-            Logger.debug(`yt-dlp getInfo raw error: ${errorOutput.substring(0, 1000)}`);
+            Logger.debug(`yt-dlp getInfo raw error: ${errorOutput.substring(0, 500)}`);
             throw new Error(this.getUserFriendlyYtDlpError(errorOutput));
         }
     }
@@ -291,13 +307,10 @@ export class Downloader {
         }
 
         // Determine format
-        // Audio: best mp3
-        // Video: best mp4 <= 480p for Telegram compatibility
-        // For Instagram, use simpler format selection as it often has limited formats
         const format = audioOnly
             ? 'bestaudio/best'
             : isInstagram
-                ? 'best[ext=mp4]/best[height<=720]/best' // Instagram videos are usually short, allow up to 720p
+                ? 'best[ext=mp4]/best[height<=720]/best'
                 : 'bestvideo[vcodec^=avc1][height<=480]+bestaudio[ext=m4a]/best[ext=mp4][height<=480]/best';
 
         const args = [
@@ -307,14 +320,13 @@ export class Downloader {
             '--no-check-certificate',
             '--no-warnings',
             '--force-ipv4',
-            '--extractor-retries', isInstagram ? '2' : '3', // More retries for YouTube
+            '--extractor-retries', '3',
             '--prefer-free-formats',
-            // '--concurrent-fragments', '8', // REMOVED: Causing HTTP 416 errors
             '--file-access-retries', '3',
-            '--socket-timeout', isInstagram ? '20' : '15',
+            '--socket-timeout', '30',
             '--newline',
             '--print', 'after_move:filepath',
-            '--no-part', // Don't use .part files (faster)
+            '--no-part',
             '-f', format,
             '-o', path.join(outputDir, '%(title).200s.%(ext)s'),
         ];
@@ -324,39 +336,34 @@ export class Downloader {
             args.push('--extractor-args', 'instagram:skip_auth_warning=True,skip_api_login=True');
             args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1');
             args.push('--add-header', 'accept-language:en-US,en;q=0.9');
-            args.push('--add-header', 'accept-encoding:gzip, deflate, br');
-            args.push('--add-header', 'dnt:1');
 
             const cookiesPath = this.getInstagramCookiesPath();
             if (cookiesPath) {
                 args.push('--cookies', cookiesPath);
             }
         } else if (isYouTube) {
-            // YouTube - Try multiple strategies to avoid "Sign in" errors
-            // If skipCookies is true, force skipping cookies
-            const cookiesPath = !skipCookies ? this.getYouTubeCookiesPath() : null;
+            // Enhanced rotation in download too
+            const currentIdentity = options.identity || (skipCookies ? 'ios' : 'desktop');
+            const cookiesPath = !skipCookies && currentIdentity === 'desktop' ? this.getYouTubeCookiesPath() : null;
 
-            if (cookiesPath) {
-                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=configs,webpage');
-                args.push('--cookies', cookiesPath);
-            } else {
-                // Aggressive cookie-free strategy with multiple fallbacks
-                args.push('--extractor-args', 'youtube:player_client=android,ios,web;player_skip=webpage,js,configs,player');
-                // Use mobile user agent to avoid bot detection
-                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
-                // Add additional headers to look more like a real mobile client
-                args.push('--add-header', 'accept-language:en-US,en;q=0.9');
-                args.push('--add-header', 'accept-encoding:gzip, deflate, br');
-                args.push('--add-header', 'dnt:1');
-                args.push('--add-header', 'sec-fetch-dest:video');
-                args.push('--add-header', 'sec-fetch-mode:navigate');
-                args.push('--add-header', 'sec-fetch-site:same-origin');
-                args.push('--add-header', 'sec-fetch-user:?1');
-                // Add more retries and timeout for YouTube issues
-                args.push('--extractor-retries', '5');
-                args.push('--fragment-retries', '10');
-                args.push('--retry-sleep', '1');
+            if (currentIdentity === 'desktop') {
+                args.push('--extractor-args', 'youtube:player_client=web;player_skip=configs,js');
+                args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+                args.push('--add-header', 'accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7');
+                if (cookiesPath) args.push('--cookies', cookiesPath);
+            } else if (currentIdentity === 'ios') {
+                args.push('--extractor-args', 'youtube:player_client=ios;player_skip=webpage,js,configs');
+                args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1');
+                args.push('--add-header', 'accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+            } else if (currentIdentity === 'tv') {
+                args.push('--extractor-args', 'youtube:player_client=tv;player_skip=webpage,js,configs');
+            } else if (currentIdentity === 'android_vr') {
+                args.push('--extractor-args', 'youtube:player_client=android_vr;player_skip=configs,js');
+                args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/13.0.0.0.34.264752251 SamsungBrowser/4.0 Chrome/86.0.4240.198 Mobile Safari/537.36');
+            } else if (currentIdentity === 'web_embedded') {
+                args.push('--extractor-args', 'youtube:player_client=web_embedded;player_skip=configs,js');
             }
+            args.push('--no-check-certificate');
         }
 
         args.push(url);
@@ -370,9 +377,11 @@ export class Downloader {
             const ytDlpBin = this.getYtDlpBin();
             const ytDlpBaseArgs = this.getYtDlpArgs();
             const env = Downloader.getYtDlpEnv();
+
             const child = ytDlpBaseArgs.length > 1
                 ? spawn(ytDlpBaseArgs[0], [...ytDlpBaseArgs.slice(1), ...args], { env })
                 : spawn(ytDlpBin, args, { env });
+
             let filePath = '';
             let lastProgress = '';
             let stderr = '';
@@ -383,7 +392,6 @@ export class Downloader {
                     if (line.trim().startsWith('/')) {
                         filePath = line.trim();
                     } else if (line.includes('%')) {
-                        // Extract progress percentage
                         const match = line.match(/(\d+\.\d+)%/);
                         if (match && onProgress) {
                             const progress = match[0];
@@ -406,8 +414,6 @@ export class Downloader {
 
             child.on('close', (code) => {
                 if (code === 0) {
-                    // In some cases (like when file already exists), --print might not trigger exactly as expected
-                    // but usually it works. If filePath is empty, we try to find the latest file in the directory.
                     if (filePath && fs.existsSync(filePath)) {
                         resolve(filePath);
                     } else {
@@ -415,7 +421,7 @@ export class Downloader {
                         try {
                             const files = fs.readdirSync(outputDir);
                             if (files.length === 0) {
-                                reject(new Error('Yuklab olingan fayl topilmadi. Post yopiq yoki o\'chirilgan bo\'lishi mumkin.'));
+                                reject(new Error('Yuklab olingan fayl topilmadi.'));
                                 return;
                             }
 
@@ -429,35 +435,28 @@ export class Downloader {
                                 reject(new Error('Yuklab olingan fayl topilmadi.'));
                             }
                         } catch (err) {
-                            Logger.error('Error finding downloaded file', err);
                             reject(new Error('Yuklab olingan fayl topilmadi.'));
                         }
                     }
                 } else {
                     const raw = stderr.substring(0, 2000);
 
-                    // RETRY MECHANISM for DOWNLOAD
-                    // If we haven't skipped cookies yet, and it's a YouTube Sign in or player extraction error
-                    if (!skipCookies && isYouTube &&
-                        (raw.includes('Sign in') || raw.includes('cookies') || raw.includes('bot') || 
-                         raw.includes('failed to extract any player response') || raw.includes('player response'))) {
-                        Logger.warn('YouTube download failed with cookies, attempting retry without cookies...');
-                        // Recursive retry without cookies
-                        const newOptions = { ...options, skipCookies: true };
-                        Downloader.download(url, newOptions)
-                            .then(resolve)
-                            .catch(reject);
+                    // RETRY MECHANISM for DOWNLOAD with identity rotation
+                    const identities: YouTubeIdentity[] = ['desktop', 'ios', 'tv', 'android_vr', 'web_embedded'];
+                    const currentIdentity = options.identity || (skipCookies ? 'ios' : 'desktop');
+                    const currentIndex = identities.indexOf(currentIdentity);
+
+                    if (isYouTube && currentIndex < identities.length - 1 &&
+                        (raw.includes('Sign in') || raw.includes('cookies') || raw.includes('bot') ||
+                            raw.includes('failed to extract any player response') || raw.includes('player response'))) {
+                        const nextIdentity = identities[currentIndex + 1];
+                        Logger.warn(`YouTube download failed (Identity: ${currentIdentity}). Retrying with next identity: ${nextIdentity}...`);
+                        const newOptions = { ...options, skipCookies: true, identity: nextIdentity };
+                        Downloader.download(url, newOptions).then(resolve).catch(reject);
                         return;
                     }
 
-                    const fallback = code === 2
-                        ? 'Yuklab olishda xatolik. Internet aloqasini tekshiring.'
-                        : 'Yuklab olishda xatolik yuz berdi.';
-
-                    const friendly = raw
-                        ? Downloader.getUserFriendlyYtDlpError(raw)
-                        : fallback;
-
+                    const friendly = raw ? Downloader.getUserFriendlyYtDlpError(raw) : 'Yuklab olishda xatolik yuz berdi.';
                     Logger.error('yt-dlp download failed', { code, stderr: raw });
                     reject(new Error(friendly));
                 }

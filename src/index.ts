@@ -6,11 +6,10 @@ import http from 'http';
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 3000;
+const PREFERRED_PORT = parseInt(process.env.PORT || '4000', 10);
 
 // Add instance identifier to avoid conflicts
 const INSTANCE_ID = process.env.RENDER_INSTANCE_ID || Date.now().toString();
-Logger.info(`Bot instance ID: ${INSTANCE_ID}`);
 
 // Health check endpoint
 app.get('/', (req: Request, res: Response) => {
@@ -30,6 +29,55 @@ app.post('/webhook', (req: Request, res: Response) => {
 bot.on('message', messageHandler);
 bot.on('callback_query', messageHandler);
 
+/**
+ * Starts the server on the specified port. 
+ * If the port is in use, it will recursively try the next port.
+ */
+const startServer = (port: number) => {
+    server.listen(port, () => {
+        Logger.info(`HTTP server listening on port ${port}`);
+        launchBot();
+    });
+
+    server.on('error', (e: any) => {
+        if (e.code === 'EADDRINUSE') {
+            Logger.warn(`Port ${port} band ekan. ${port + 1} portini sinab ko'ryapman...`);
+            setTimeout(() => {
+                server.close();
+                startServer(port + 1);
+            }, 1000);
+        } else {
+            Logger.error('Server hatosi:', e);
+        }
+    });
+};
+
+const launchBot = async () => {
+    try {
+        // Clean up any existing webhook
+        try {
+            await bot.telegram.deleteWebhook();
+            Logger.info('Webhook tozalandi.');
+        } catch (webhookError) {
+            // Ignore webhook cleanup errors
+        }
+
+        // Start Telegram bot with polling (non-blocking)
+        bot.launch()
+            .then(() => {
+                Logger.info('Bot muvaffaqiyatli ishga tushdi!');
+            })
+            .catch((err) => {
+                Logger.error('Botni launch qilishda xatolik:', err);
+                // Don't exit here, maybe only if it's a fatal API error
+            });
+
+        Logger.info('Bot xabarlarni kutmoqda...');
+    } catch (error: any) {
+        Logger.error('Bot launch jarayonida hatolik:', error);
+    }
+};
+
 const start = async () => {
     try {
         Logger.info('Sonex Music Bot ishga tushmoqda...');
@@ -37,62 +85,39 @@ const start = async () => {
         // Check for required environment variables
         if (!process.env.BOT_TOKEN) {
             Logger.error('BOT_TOKEN environment variable is missing!');
-            Logger.error('Please set BOT_TOKEN in your environment variables or .env file.');
             process.exit(1);
         }
 
-        // Start HTTP server for Render
-        server.listen(PORT, () => {
-            Logger.info(`HTTP server listening on port ${PORT}`);
-        });
+        // Start looking for a free port
+        startServer(PREFERRED_PORT);
 
-        // Clean up any existing webhook and wait a bit to avoid conflicts
-        try {
-            Logger.info('Cleaning up any existing webhook...');
-            await bot.telegram.deleteWebhook();
-            Logger.info('Webhook deleted, waiting 2 seconds...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        } catch (webhookError) {
-            Logger.warn('Webhook cleanup failed (this is usually ok):', webhookError);
-        }
-
-        // Start Telegram bot with polling
-        await bot.launch();
-        Logger.info('Bot muvaffaqiyatli ishga tushdi!');
     } catch (error: any) {
-        Logger.error('Botni ishga tushirishda xatolik:', error);
-        if (error.message) {
-            Logger.error(`Error message: ${error.message}`);
-        }
-        if (error.stack) {
-            Logger.error(`Stack trace: ${error.stack}`);
-        }
-        
-        // If it's a 409 conflict, wait and retry once
-        if (error.message && error.message.includes('409')) {
-            Logger.info('409 Conflict detected, waiting 10 seconds and retrying...');
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            try {
-                await bot.launch();
-                Logger.info('Bot successfully started after retry!');
-                return;
-            } catch (retryError: any) {
-                Logger.error('Retry failed:', retryError);
-            }
-        }
-        
+        Logger.error('Startup jarayonida kutilmagan xatolik:', error);
         process.exit(1);
     }
 };
 
 // Enable graceful stop
-process.once('SIGINT', () => {
+const stop = (signal: string) => {
     server.close();
-    bot.stop('SIGINT');
+    bot.stop(signal);
+    process.exit(0);
+};
+
+process.once('SIGINT', () => stop('SIGINT'));
+process.once('SIGTERM', () => stop('SIGTERM'));
+
+// Global error handlers
+process.on('unhandledRejection', (reason, promise) => {
+    Logger.error(`Unhandled Rejection at: ${promise}`, reason);
 });
-process.once('SIGTERM', () => {
-    server.close();
-    bot.stop('SIGTERM');
+
+process.on('uncaughtException', (error) => {
+    Logger.error('Uncaught Exception:', error);
+    // Only exit if it's not a server error we handle
+    if (!(error as any).code || (error as any).code !== 'EADDRINUSE') {
+        process.exit(1);
+    }
 });
 
 start();
